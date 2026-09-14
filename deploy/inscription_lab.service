@@ -1,0 +1,19 @@
+# Linux systemd example. Adjust user, directory and Node executable before installing.
+[Unit]
+Description=Inscription lab website and Cloudflare API relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/srv/inscription-lab
+ExecStart=/usr/bin/node /srv/inscription-lab/server.mjs
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

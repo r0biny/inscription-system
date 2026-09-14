@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.env*
+*.log
+*.tsbuildinfo
+.DS_Store
+playwright-report/
+test-results/
+*.sqlite*
+*.sql
+*.pem
+work/
+cloudflare-data/

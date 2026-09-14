@@ -1,0 +1,116 @@
+{
+  "id": "practice_case_tutorial_examples_v1",
+  "caseName": "practice_case_tutorial_examples_v1",
+  "caseSetId": "case_tutorial_examples_v1",
+  "caseSetName": "case_tutorial_examples_v1",
+  "title": "入门练习材料",
+  "zitieId": "practice-case",
+  "zitieIdPrefix": "practice",
+  "sourceCollection": "online_prepared_material",
+  "referenceId": "case_tutorial_examples_v1:practice:T02-T01",
+  "coverImageUrl": "/study-data/home-covers/practice.jpg?v=217431e3fc0a",
+  "transcription": "",
+  "transcriptionDirection": "vertical",
+  "aiPredictionMetadata": {
+    "model": "none",
+    "generatedAt": "",
+    "isDummy": true,
+    "availability": "unavailable"
+  },
+  "pages": [
+    {
+      "id": 1,
+      "index": 0,
+      "label": "第 1 页",
+      "imageUrl": "/study-data/practice/case/pages/page_001.jpg?v=c3964e6b3a84",
+      "thumbnailUrl": "/study-data/practice/case/thumbnails/page_001.jpg?v=df8dfa1d6bfa",
+      "width": 1565,
+      "height": 2048,
+      "format": "JPEG",
+      "transcription": "",
+      "targetCount": 2
+    }
+  ],
+  "targets": [
+    {
+      "id": "T01",
+      "glyphId": "practice_T01",
+      "label": "目标字符 1",
+      "pageId": 1,
+      "sequence": 22,
+      "pageSequence": 22,
+      "transcription": "",
+      "bbox": {
+        "x": 920.9478978413655,
+        "y": 590.1295895665515,
+        "width": 67.40420431726908,
+        "height": 68.69480629075565
+      },
+      "crop": {
+        "x": 920.183860441767,
+        "y": 590.1649405446874,
+        "size": 68.7380130418105
+      },
+      "glyphUrl": "/study-data/practice/case/glyphs/T01.png?v=d69789082d1a",
+      "maskUrl": "",
+      "maskLevel": 0,
+      "maskComponents": [],
+      "damageTier": 0,
+      "damageSeverity": "Natural",
+      "maskRatio": 0,
+      "candidates": []
+    },
+    {
+      "id": "T02",
+      "glyphId": "practice_T02",
+      "label": "目标字符 2",
+      "pageId": 1,
+      "sequence": 117,
+      "pageSequence": 117,
+      "transcription": "",
+      "bbox": {
+        "x": 431.48668423694784,
+        "y": 1584.0066283084004,
+        "width": 62.21896335341365,
+        "height": 67.39860375911009
+      },
+      "crop": {
+        "x": 428.96084337349396,
+        "y": 1584.1166091292673,
+        "size": 67.36325278097429
+      },
+      "glyphUrl": "/study-data/practice/case/glyphs/T02.png?v=4ae58fc412d3",
+      "maskUrl": "",
+      "maskLevel": 0,
+      "maskComponents": [],
+      "damageTier": 0,
+      "damageSeverity": "Natural",
+      "maskRatio": 0,
+      "candidates": []
+    }
+  ],
+  "extraDamage": [],
+  "readiness": {
+    "status": "natural_tutorial",
+    "hasTranscription": false,
+    "hasAiCandidates": false
+  },
+  "practiceMetadata": {
+    "sourceCaseSetId": "case_tutorial_examples_v1",
+    "sourceCaseId": "case_ab40e6__元简墓志__P01S0117述-P01S0022郷__NATURAL__cfg-1be9",
+    "targets": [
+      {
+        "id": "T01",
+        "sourceTargetId": "T02",
+        "sourceGlyphId": "d6db1327bd6841ceb4fb757a0bf80e28",
+        "drawingMode": "outline"
+      },
+      {
+        "id": "T02",
+        "sourceTargetId": "T01",
+        "sourceGlyphId": "634284a8d13139d83964b8c8088933c9",
+        "drawingMode": "skeleton"
+      }
+    ]
+  }
+}
