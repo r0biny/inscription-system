@@ -13,6 +13,7 @@ import {
   type CSSProperties,
 } from "react";
 import { ArrowLeft, Bug, Download, ImageIcon, Pause, Play, Redo2, Trash2, Undo2, X, type LucideIcon } from "lucide-react";
+import { labStorageKey } from "./lab_runtime";
 import {
   getConditionLabel,
   getStudyCondition,
@@ -333,6 +334,24 @@ function createDraft(config: StudyConfig, studyCase: StudyCase, previousInputRep
     inputReport: inputReportFromPreset(previousInputReport),
     pointerSummary: { ...EMPTY_POINTER_SUMMARY },
     events: [{ at: startedAt, type: "task_started" }],
+  };
+}
+
+function authoringDraftFromGuides(config: StudyConfig, studyCase: StudyCase): StudyDraft {
+  const draft = createDraft(config, studyCase);
+  const firstTarget = studyCase.targets[0];
+  return {
+    ...draft,
+    stage: 3,
+    drawingSettings: { ...draft.drawingSettings, brushWidth: practiceGuideForTarget(firstTarget.id).brushWidth },
+    stageEnteredAt: { 3: draft.startedAt },
+    answers: Object.fromEntries(studyCase.targets.map(target => [target.id, {
+      ...blankAnswer(),
+      hypothesis: practiceGuideForTarget(target.id).character,
+      selectionSource: "custom" as const,
+      strokes: clonePracticeStrokes(target.id),
+    }])),
+    events: [{ at: draft.startedAt, type: "tutorial_authoring_seeded_from_guides" }],
   };
 }
 
@@ -1294,32 +1313,32 @@ function TaskIntroModal({ taskOrder, drawingName, assisted, mixed, busy, onStart
 
 type PracticeGuideTip = { id: string; target: string; title: string; body: string };
 
-function PracticeGuide({ stage, drawingPhase, drawingReady, enabled, onDrawingAdvance, onSeen }: {
+function PracticeGuide({ stage, drawingPhase, enabled, busy, error, onAdvance }: {
   stage: Stage;
   drawingPhase: PracticeDrawingPhase;
-  drawingReady: boolean;
   enabled: boolean;
-  onDrawingAdvance: () => void;
-  onSeen: (ids: string[]) => void;
+  busy: boolean;
+  error: string;
+  onAdvance: () => void;
 }) {
   const tips = useMemo<PracticeGuideTip[]>(() => {
     if (stage === 1) return [
-      { id: "roadmap", target: "roadmap", title: "先看顶部流程", body: "这里会一直显示任务的五个步骤。红色标记表示当前步骤，已经完成的步骤会显示勾选。流程只能向右推进，进入下一步后不能返回；请确认当前步骤的内容和操作无误后再继续。" },
-      { id: "stage1-viewer", target: "stage1-viewer", title: "从整幅碑刻开始观察", body: "先浏览整体布局，再结合目标字符的位置、残存笔画和周围文字形成基本判断。请尽量在心中有了初步判断后，再点击页面下方按钮进入下一步。" },
+      { id: "roadmap", target: "roadmap", title: "先看顶部流程", body: "任务共有五步，红色标记表示当前步骤。正式任务只能向前推进。本次引导无需作答，只需点击“下一步”。" },
+      { id: "stage1-viewer", target: "stage1-viewer", title: "整体观察", body: "正式任务从观察整幅拓片开始：留意目标字符的位置、残存笔画和周围文字。这里先了解页面即可。" },
     ];
     if (stage === 2) return [
-      { id: "stage2-input", target: "stage2-input", title: "填写字符判断", body: "请结合目标字符的位置、残存笔画和周围文字作出判断，并在“我的判断”中填写你认为最合理的字符。不必等到完全确定，请提交基于现有线索形成的判断。" },
+      { id: "stage2-input", target: "stage2-input", title: "字符判断", body: "正式任务中，在“我的判断”里填写你推测的字符。不必完全确定，按现有线索判断即可。本次无需填写。" },
     ];
     if (stage === 3) return [
       drawingPhase === "outline"
-        ? { id: "stage3-outline", target: "stage3-drawing", title: "为“郷”练习外轮廓（outline）", body: "外轮廓（outline）表达笔画完整的外部边界。画笔已经自动切换为较细的轮廓线，请在预置笔画的基础上完成绘制。" }
-        : { id: "stage3-skeleton", target: "stage3-drawing", title: "为“述”练习结构骨架（skeleton）", body: "结构骨架（skeleton）表达字符主要结构的中心线，不需要模仿真实笔画的粗细。画笔已经自动切换为较粗的骨架线，请在预置笔画的基础上完成绘制。" },
+        ? { id: "stage3-outline", target: "stage3-drawing", title: "外轮廓（outline）", body: "外轮廓描绘笔画的外部边界，使用较细的线。画布中的红色笔画是示例，本次无需绘制。正式任务请按标题要求绘制。" }
+        : { id: "stage3-skeleton", target: "stage3-drawing", title: "结构骨架（skeleton）", body: "结构骨架描绘笔画的中心线，不需要模仿笔画粗细。这里已自动切换字符、标题和画笔粗细。本次只需查看示例。" },
     ];
     if (stage === 4) return [
-      { id: "stage4-review", target: "stage4-review", title: "提交前检查结果", body: "这里会集中展示你的字符判断和绘制结果。本页只用于核对，确认提交后，修复内容将被锁定。" },
+      { id: "stage4-review", target: "stage4-review", title: "检查结果", body: "正式任务在这里核对字符判断和绘制结果。本页不能返回修改，提交后修复内容会锁定。本次只展示示例。" },
     ];
     if (stage === 5) return [
-      { id: "stage5-survey", target: "stage5-survey", title: "最后完成问卷", body: "完成修复后，会显示一份问卷。选择最符合实际感受的选项后，即可完成新手引导。" },
+      { id: "stage5-survey", target: "stage5-survey", title: "最后填写问卷", body: "正式任务最后填写作答设备和主观感受，提交后返回 Dashboard。本次无需填写，点击下方按钮即可完成引导。" },
     ];
     return [];
   }, [drawingPhase, stage]);
@@ -1328,7 +1347,6 @@ function PracticeGuide({ stage, drawingPhase, drawingReady, enabled, onDrawingAd
   const [placement, setPlacement] = useState<"above" | "below" | "left">("below");
   const popoverRef = useRef<HTMLElement | null>(null);
   const tip = tips[index];
-  const interactiveDrawing = stage === 3;
   const preferLeftPlacement = stage === 2 || stage === 3;
 
   useLayoutEffect(() => {
@@ -1360,41 +1378,33 @@ function PracticeGuide({ stage, drawingPhase, drawingReady, enabled, onDrawingAd
       setPosition({ width, left, top });
     };
     target.classList.add("practice-guide-active");
-    if (interactiveDrawing) target.classList.add("practice-guide-interactive-target");
     update();
+    // Wrapping changes after the initial width is applied, especially on narrow screens.
+    const resizeObserver = new ResizeObserver(update);
+    if (popoverRef.current) resizeObserver.observe(popoverRef.current);
+    resizeObserver.observe(target);
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
     return () => {
       target.classList.remove("practice-guide-active");
-      target.classList.remove("practice-guide-interactive-target");
+      resizeObserver.disconnect();
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
     };
-  }, [enabled, interactiveDrawing, preferLeftPlacement, tip]);
+  }, [enabled, preferLeftPlacement, tip, error]);
 
   if (!enabled || !tip) return null;
-  const finish = () => onSeen(tips.map((item) => item.id));
-  const advanceDrawing = () => {
-    if (!drawingReady) return;
-    if (drawingPhase === "skeleton") {
-      finish();
-      return;
-    }
-    onDrawingAdvance();
-  };
+  const guideNumber = stage === 1 ? index + 1 : stage === 2 ? 3 : stage === 3 ? drawingPhase === "outline" ? 4 : 5 : stage + 2;
   return (
-    <div className="practice-guide-root" role="dialog" aria-modal="true" aria-label="新手引导步骤说明">
-      <div className={`practice-guide-layer ${interactiveDrawing ? "is-interactive" : ""}`}><div className="practice-guide-shade" /></div>
+    <div className="practice-guide-root" role="dialog" aria-modal="true" aria-label="新手引导步骤说明" onKeyDown={(event) => { if (event.key === "Tab") { event.preventDefault(); popoverRef.current?.querySelector("button")?.focus(); } }}>
+      <div className="practice-guide-layer"><div className="practice-guide-shade" /></div>
       <aside ref={popoverRef} className={`practice-guide-popover is-${placement}`} style={position}>
-        {!interactiveDrawing && <button className="practice-guide-close" aria-label="关闭本步骤引导" onClick={finish}><X size={15} /></button>}
-        <span className="practice-guide-index">{interactiveDrawing ? `绘制练习 · ${drawingPhase === "outline" ? "1 / 2" : "2 / 2"}` : `引导 ${index + 1} / ${tips.length}`}</span>
+        <span className="practice-guide-index">引导 {guideNumber} / 7</span>
         <h2>{tip.title}</h2>
         <p>{tip.body}</p>
-        {interactiveDrawing && !drawingReady && <p className="practice-guide-requirement">请先在红色起始笔画的基础上绘制至少一笔。</p>}
+        {error && <p className="practice-guide-requirement" role="alert">{error}</p>}
         <div className="practice-guide-actions">
-          {interactiveDrawing
-            ? <button className="primary-button" disabled={!drawingReady} onClick={advanceDrawing}>{drawingPhase === "outline" ? "完成外轮廓，练习结构骨架" : "完成结构骨架"}<span>→</span></button>
-            : <button className="primary-button" onClick={() => index < tips.length - 1 ? setIndex(index + 1) : finish()}>{index < tips.length - 1 ? "下一条" : stage === 5 ? "开始作答" : "明白了"}<span>→</span></button>}
+          <button className="primary-button" autoFocus disabled={busy} onClick={() => index < tips.length - 1 ? setIndex(index + 1) : onAdvance()}>{busy ? "正在完成…" : stage === 5 ? "完成新手引导" : "下一步"}<span>→</span></button>
         </div>
       </aside>
     </div>
@@ -1426,14 +1436,16 @@ export type OnlineStudyTask = {
   previousInputReport?: PreviousInputReport | null;
   targetDrawingModes?: Record<string, DrawingMode>;
   skipQuestionnaire?: boolean;
+  authoringFromGuides?: boolean;
 };
 
 type StudyAppProps = {
+  localFirst?: boolean;
   debugMode?: boolean;
   mode?: "study" | "practice";
   onlineTask?: OnlineStudyTask;
   onlineSaveState?: string;
-  onDraftChange?: (draft: StudyDraft) => void;
+  onDraftChange?: (draft: StudyDraft) => void | Promise<void>;
   onPause?: () => Promise<void>;
   onResume?: (resumedAt: string) => Promise<void>;
   onTaskComplete?: (draft: StudyDraft) => Promise<void>;
@@ -1441,6 +1453,7 @@ type StudyAppProps = {
 };
 
 export function StudyApp({
+  localFirst = false,
   debugMode = false,
   mode = "study",
   onlineTask,
@@ -1453,6 +1466,11 @@ export function StudyApp({
 }: StudyAppProps) {
   const isOnline = Boolean(onlineTask);
   const isPractice = mode === "practice";
+  const isGuideAuthoring = Boolean(onlineTask?.authoringFromGuides);
+  // Keep researcher edits separate from formal drafts and published guide assets.
+  const draftStorageKey = isGuideAuthoring
+    ? labStorageKey(`tutorial-authoring:${onlineTask!.config.participantId}:v2`)
+    : DRAFT_KEY;
   const [draft, setDraft] = useState<StudyDraft | null>(null);
   const [saveState, setSaveState] = useState("正在读取任务");
   const [submissionBusy, setSubmissionBusy] = useState(false);
@@ -1462,7 +1480,7 @@ export function StudyApp({
   const [observationTargetId, setObservationTargetId] = useState<string | null>(null);
   const [reviewTargetId, setReviewTargetId] = useState<string | null>(null);
   const [focusRequestKey, setFocusRequestKey] = useState(0);
-  const [practiceGuideSeen, setPracticeGuideSeen] = useState<string[]>([]);
+  const [practiceCompletionError, setPracticeCompletionError] = useState("");
   const [practiceDrawingPhase, setPracticeDrawingPhase] = useState<PracticeDrawingPhase>("outline");
   const viewportStateCache = useRef<Record<number, HeritageViewportState>>({});
 
@@ -1474,28 +1492,47 @@ export function StudyApp({
       ? requestedConfig
       : { ...requestedConfig, caseId: studyCase.id, condition: "skeleton_no_llm" as const };
     try {
-      const saved = window.localStorage.getItem(DRAFT_KEY);
+      const saved = window.localStorage.getItem(draftStorageKey);
       const raw = isPractice ? null : onlineTask?.entry
         ? onlineTask.entry as unknown as StudyDraft | LegacyStudyDraft
         : saved ? (JSON.parse(saved) as StudyDraft | LegacyStudyDraft) : null;
       const previousInputReport = onlineTask.previousInputReport ?? null;
-      const parsed = raw && (raw.version === 3 || raw.version === 4) ? migrateDraft(raw, previousInputReport) : null;
+      const parsed = raw && (raw.version === 3 || raw.version === 4)
+        ? isGuideAuthoring && raw.version === 4 ? raw : migrateDraft(raw, previousInputReport)
+        : null;
       const compatible = parsed
         && sameConfig(parsed.config, config)
         && studyCase.pages.some((page) => page.id === parsed.activePageId)
         && studyCase.targets.every((target) => parsed.answers[target.id]);
-      const restored = compatible
+      let restored = compatible
         ? { ...parsed, pauseStartedAt: parsed.pauseStartedAt ?? null, pausePeriods: parsed.pausePeriods ?? [], reviewNote: parsed.reviewNote ?? "" }
-        : createDraft(config, studyCase, previousInputReport);
+        : isGuideAuthoring ? authoringDraftFromGuides(config, studyCase) : createDraft(config, studyCase, previousInputReport);
+      if (isGuideAuthoring) {
+        // Reopen even a previously submitted authoring copy for further edits.
+        restored = { ...restored, stage: 3, pauseStartedAt: null,
+          restorationSubmittedAt: null, questionnaireSubmittedAt: null,
+          answers: Object.fromEntries(Object.entries(restored.answers).map(([id, answer]) => [id, { ...answer, finalDrawingPng: null }])) };
+      }
       setDraft(onlineTask?.pausedAt && !restored.pauseStartedAt ? { ...restored, pauseStartedAt: onlineTask.pausedAt } : restored);
     } catch {
-      const created = createDraft(config, studyCase, onlineTask.previousInputReport ?? null);
+      const created = isGuideAuthoring ? authoringDraftFromGuides(config, studyCase) : createDraft(config, studyCase, onlineTask.previousInputReport ?? null);
       setDraft(onlineTask?.pausedAt ? { ...created, pauseStartedAt: onlineTask.pausedAt } : created);
     }
-  }, [isPractice, onlineTask?.taskId]);
+  }, [isPractice, isGuideAuthoring, draftStorageKey, onlineTask?.taskId]);
 
   useEffect(() => {
     if (!draft) return;
+    if (isGuideAuthoring) {
+      try {
+        window.localStorage.setItem(draftStorageKey, JSON.stringify(draft));
+        setSaveState("补画草稿已保存到本机");
+      } catch { setSaveState("本机保存失败，请勿关闭页面"); }
+      return;
+    }
+    if (localFirst) {
+      void Promise.resolve(onDraftChange?.(draft)).catch(() => setSaveState("本机保存失败，请勿关闭页面"));
+      return;
+    }
     setSaveState("保存中…");
     const timer = window.setTimeout(() => {
       try {
@@ -1518,7 +1555,7 @@ export function StudyApp({
       }
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [draft, isOnline, isPractice, onDraftChange]);
+  }, [draft, isOnline, isPractice, isGuideAuthoring, draftStorageKey, localFirst, onDraftChange]);
 
   useEffect(() => {
     if (!draft?.pauseStartedAt) return;
@@ -1526,6 +1563,19 @@ export function StudyApp({
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previousOverflow; };
   }, [draft?.pauseStartedAt]);
+
+  useEffect(() => {
+    if (!localFirst) return;
+    const pauseHidden = () => {
+      if (document.visibilityState !== "hidden") return;
+      const at = now();
+      setDraft(current => current && current.stage < 6 && !current.pauseStartedAt
+        ? { ...current, pauseStartedAt: at, events: [...current.events, { at, type: "task_paused", detail: "background" }] }
+        : current);
+    };
+    document.addEventListener("visibilitychange", pauseHidden);
+    return () => document.removeEventListener("visibilitychange", pauseHidden);
+  }, [localFirst]);
 
   const studyCase = onlineTask?.material;
   if (!draft || !studyCase) return <main className="loading-state">正在准备碑刻材料…</main>;
@@ -1630,9 +1680,6 @@ export function StudyApp({
   const completedDrawings = studyCase.targets.filter((target) => draft.answers[target.id].strokes.some((stroke) => stroke.tool === "brush")).length;
   const missingHypotheses = studyCase.targets.flatMap((target, index) => isHypothesisComplete(draft.answers[target.id].hypothesis) ? [] : [`字符 ${String(index + 1).padStart(2, "0")}`]);
   const missingDrawings = studyCase.targets.flatMap((target, index) => draft.answers[target.id].strokes.some((stroke) => stroke.tool === "brush") ? [] : [`字符 ${String(index + 1).padStart(2, "0")}`]);
-  const activePracticeGuide = practiceGuideForTarget(activeTarget.id);
-  const practiceStarterCount = activePracticeGuide ? countBrushStrokes(activePracticeGuide.strokes) : 0;
-  const practiceDrawingReady = countBrushStrokes(activeAnswer.strokes) > practiceStarterCount;
 
   const pauseTask = () => {
     const at = now();
@@ -1727,12 +1774,12 @@ export function StudyApp({
     };
     if (onTaskComplete) {
       setSubmissionBusy(true);
-      setSaveState("正在提交到服务器…");
+      setSaveState(localFirst ? "正在保存本机提交…" : "正在提交到服务器…");
       try {
-        if (!isPractice) window.localStorage.setItem(DRAFT_KEY, JSON.stringify(completedDraft));
+        if (!isPractice && !localFirst) window.localStorage.setItem(DRAFT_KEY, JSON.stringify(completedDraft));
         await onTaskComplete(completedDraft);
       } catch {
-        setSaveState("提交失败，记录仍保存在本机，请检查网络后重试");
+        setSaveState(localFirst ? "本机提交保存失败，请勿关闭页面，请重试或联系研究者" : "提交失败，记录仍保存在本机，请检查网络后重试");
       } finally {
         setSubmissionBusy(false);
       }
@@ -1765,7 +1812,7 @@ export function StudyApp({
       setSubmissionBusy(true);
       setSaveState("正在保存素材绘制…");
       try {
-        window.localStorage.setItem(DRAFT_KEY, JSON.stringify(completedDraft));
+        window.localStorage.setItem(draftStorageKey, JSON.stringify(completedDraft));
         await onTaskComplete(completedDraft);
       } catch {
         setSaveState("保存失败，记录仍保存在本机，请检查后重试");
@@ -1839,7 +1886,7 @@ export function StudyApp({
   };
 
   const advancePracticeDrawing = () => {
-    if (!isPractice || !practiceDrawingReady) return;
+    if (!isPractice) return;
     if (practiceDrawingPhase === "outline") {
       const at = now();
       const nextTargetId = practiceTargetForPhase("skeleton");
@@ -1855,7 +1902,19 @@ export function StudyApp({
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
-    openTransition(4);
+    enterStage(4);
+  };
+
+  const advancePracticeGuide = async () => {
+    if (!isPractice || submissionBusy) return;
+    if (draft.stage === 3) { advancePracticeDrawing(); return; }
+    if (draft.stage < 5) { enterStage((draft.stage + 1) as Stage); return; }
+    // A walkthrough completion is not a fabricated questionnaire or drawing entry.
+    setSubmissionBusy(true);
+    setPracticeCompletionError("");
+    try { await onTaskComplete?.(draft); }
+    catch { setPracticeCompletionError("暂时无法记录引导完成，请检查网络后重试。"); }
+    finally { setSubmissionBusy(false); }
   };
 
   const inputReportComplete = Boolean(
@@ -1881,7 +1940,7 @@ export function StudyApp({
   ].filter(Boolean);
 
   return (
-    <main className="study-shell">
+    <main className={isPractice ? "study-shell is-practice-walkthrough" : "study-shell"} inert={submissionBusy}>
       <header className="site-header">
         <div className="identity"><span className="seal" aria-hidden="true">修</span><div><p className="eyebrow">INSCRIPTION RESTORATION STUDY</p><p className="brand">碑刻字符修复工作台</p></div></div>
         <div className="study-header-tools">
@@ -2058,15 +2117,15 @@ export function StudyApp({
 
       {draft.stage === 5 && (
         <>
-          <StageHeader stage={5} title="完成一份简短问卷" description="您的修复结果已经保存并锁定。下列问题只用于记录本次任务的主观感受。" />
+          <StageHeader stage={5} title="完成一份简短问卷" description={isPractice ? "问卷页面示例，本次引导无需填写。" : "您的修复结果已经保存并锁定。下列问题只用于记录本次任务的主观感受。"} />
           <section className="questionnaire" data-practice-guide={isPractice ? "stage5-survey" : undefined}>
             {isPractice ? (
               <article className="questionnaire-section">
-                <div className="questionnaire-section-heading"><h2>引导确认</h2></div>
+                <div className="questionnaire-section-heading"><h2>问卷示例</h2></div>
                 <div className="question-card overall-question">
                   <div className="question-row">
-                    <h3>完成新手引导后，您是否理解任务的基本操作流程？</h3>
-                    <Rating label="新手引导理解程度" lowLabel="完全不理解" highLabel="完全理解" value={draft.difficulty} onChange={(difficulty) => setDraft({ ...draft, difficulty })} />
+                    <h3>您觉得本次修复任务的整体难度如何？</h3>
+                    <Rating label="任务难度示例" lowLabel="非常容易" highLabel="非常困难" value={draft.difficulty} onChange={(difficulty) => setDraft({ ...draft, difficulty })} />
                   </div>
                 </div>
               </article>
@@ -2191,16 +2250,10 @@ export function StudyApp({
         key={`${draft.stage}-${practiceDrawingPhase}`}
         stage={draft.stage}
         drawingPhase={practiceDrawingPhase}
-        drawingReady={practiceDrawingReady}
-        enabled={isPractice && draft.stage <= 5 && !taskIntroOpen && !draft.pauseStartedAt && !transition && !practiceGuideSeen.includes(
-          draft.stage === 1 ? "stage1-viewer"
-            : draft.stage === 2 ? "stage2-input"
-              : draft.stage === 3 ? practiceDrawingPhase === "outline" ? "stage3-outline" : "stage3-skeleton"
-                : draft.stage === 4 ? "stage4-review"
-                  : "stage5-survey",
-        )}
-        onDrawingAdvance={advancePracticeDrawing}
-        onSeen={(ids) => setPracticeGuideSeen((current) => [...new Set([...current, ...ids])])}
+        enabled={isPractice && draft.stage <= 5 && !taskIntroOpen && !draft.pauseStartedAt && !transition}
+        busy={submissionBusy}
+        error={practiceCompletionError}
+        onAdvance={() => void advancePracticeGuide()}
       />
     </main>
   );

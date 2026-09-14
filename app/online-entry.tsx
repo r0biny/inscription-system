@@ -5,9 +5,10 @@ import { ArrowRight, Check, Lock, LogOut, MessageCircle, RotateCcw, X } from "lu
 import { StudyApp, type OnlineStudyTask, type PreviousInputReport, type StudyDraft } from "./study-app";
 import { getConditionLabel, type StudyCase, type StudyCondition } from "./study-data";
 import { CONFIG_KEY, DRAFT_KEY, type StudyConfig } from "./study-storage";
+import { OfflineStore, browserPersistence, pending, localHome } from "./offline_store";
+import { OfflineSync, offlineApi, prepareOfflineAssets } from "./offline_runtime";
 import practiceMaterialSource from "../study-materials/online/practice-case.json";
-import { labMaterials, labStorageKey, labUrl } from "./lab_runtime";
-
+import { labMaterials, labStorageKey } from "./lab_runtime";
 const practiceMaterialJson = labMaterials(practiceMaterialSource);
 
 type OnlineTaskPayload = {
@@ -114,16 +115,7 @@ function preloadStudyWorkspace(imageUrl: string) {
   image.src = imageUrl;
 }
 
-async function api<T>(path: string, init?: RequestInit) {
-  const response = await fetch(labUrl(path), {
-    ...init,
-    headers: { accept: "application/json", ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers },
-    credentials: "same-origin",
-  });
-  const body = await response.json() as T & ApiFailure;
-  if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`);
-  return labMaterials(body) as T;
-}
+const api = offlineApi;
 
 function normalizeMaterial(material: StudyCase) {
   return {
@@ -146,42 +138,14 @@ function configFor(session: ActiveSession): StudyConfig {
   };
 }
 
-function readPendingLocalDraft(session: ActiveSession) {
-  try {
-    const sync = JSON.parse(window.localStorage.getItem(DRAFT_SYNC_KEY) ?? "null") as DraftSyncState | null;
-    const draft = JSON.parse(window.localStorage.getItem(DRAFT_KEY) ?? "null") as StudyDraft | null;
-    const config = draft?.config;
-    if (!sync?.pending || sync.taskId !== session.task.taskId || sync.serverRevision !== session.task.revision || !config) return null;
-    if (config.participantId !== session.participantId || config.sessionId !== session.sessionId
-      || config.caseId !== session.task.caseId || config.condition !== session.task.condition
-      || config.taskOrder !== session.task.taskOrder) return null;
-    return draft;
-  } catch {
-    return null;
-  }
-}
-
-function persistDraftSyncState(state: DraftSyncState) {
-  window.localStorage.setItem(DRAFT_SYNC_KEY, JSON.stringify(state));
-}
-
-function persistActiveTask(session: ActiveSession, pendingLocalDraft: StudyDraft | null) {
-  window.localStorage.setItem(CONFIG_KEY, JSON.stringify(configFor(session)));
-  if (pendingLocalDraft) return;
-  if (session.task.entry) window.localStorage.setItem(DRAFT_KEY, JSON.stringify(session.task.entry));
-  else window.localStorage.removeItem(DRAFT_KEY);
-  persistDraftSyncState({ taskId: session.task.taskId, serverRevision: session.task.revision, pending: false });
+function pauseMarkerKey(sessionId: string, taskId: string) {
+  return labStorageKey("pause:" + sessionId + ":" + taskId);
 }
 
 function clearLocalTask() {
   window.localStorage.removeItem(CONFIG_KEY);
   window.localStorage.removeItem(DRAFT_KEY);
   window.localStorage.removeItem(DRAFT_SYNC_KEY);
-}
-
-function sendPauseBeacon() {
-  if (!navigator.sendBeacon) return;
-  navigator.sendBeacon(labUrl("/api/session/pause"), new Blob(["{}"], { type: "application/json" }));
 }
 
 function RubbingCover({ imageUrl, locked = false }: { imageUrl: string; locked?: boolean }) {
@@ -329,8 +293,8 @@ function HomeView({ session, busy, notice, preloadImageUrl, onPractice, onTutori
       {notice && <p className="home-notice" role="status"><Check size={17} />{notice}</p>}
       {session.tutorialAuthoring && (
         <section className="tutorial-authoring-card">
-          <div><span>本地研究者任务</span><h2>新手引导素材制作</h2><p>先为“郷”绘制 outline，再为“述”绘制 skeleton。完成检查后直接保存，不填写问卷。</p></div>
-          <button type="button" disabled={busy} onClick={onTutorialAuthoring}>{session.tutorialAuthoring.completedAt ? "重新绘制" : "开始制作"}<ArrowRight size={16} /></button>
+          <div><span>本地研究者任务</span><h2>新手引导素材制作</h2><p>已载入当前示例笔画：为“郷”补画 outline，为“述”补画 skeleton。直接进入绘制，完成检查后保存，无需问卷。</p></div>
+          <button type="button" disabled={busy} onClick={onTutorialAuthoring}>继续补画示例<ArrowRight size={16} /></button>
         </section>
       )}
 
@@ -341,7 +305,7 @@ function HomeView({ session, busy, notice, preloadImageUrl, onPractice, onTutori
             <div className="practice-card-cover"><img src={practiceMaterialJson.coverImageUrl} alt="" aria-hidden="true" /></div>
             <div className="home-card-body">
               <div className="home-card-status"><h3>新手引导</h3><span className={`status-pill ${session.practice.completed ? "completed" : "ready"}`}>{session.practice.completed ? <><Check size={13} />已完成</> : "待完成"}</span></div>
-              <button className="home-card-button" disabled={busy} onClick={onPractice}>{session.practice.completed ? <><RotateCcw size={15} />再次练习</> : <>开始新手引导<ArrowRight size={16} /></>}</button>
+              <button className="home-card-button" disabled={busy} onClick={onPractice}>{session.practice.completed ? <><RotateCcw size={15} />重新查看</> : <>开始新手引导<ArrowRight size={16} /></>}</button>
             </div>
           </article>
         </div>
@@ -381,130 +345,218 @@ export function OnlineEntry() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [saveState, setSaveState] = useState("正在连接实验服务器");
-  const sessionRef = useRef<ActiveSession | null>(null);
-  const revisionRef = useRef(0);
-  const pendingDraftRef = useRef<StudyDraft | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
-  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const lastServerActivityRef = useRef(0);
-  const pendingResumeRef = useRef<PendingResume | null>(null);
-  const resumeSyncPromiseRef = useRef<Promise<void> | null>(null);
+
+  const storeRef = useRef<OfflineStore | null>(null);
+  const syncRef = useRef<OfflineSync | null>(null);
+  const preparingRef = useRef(false);
+  const localWriteFailed = useRef(false);
+  const [syncProblem, setSyncProblem] = useState("");
+  const [offlinePending, setOfflinePending] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
+
+  const refreshLocalHome = useCallback(() => {
+    const state = storeRef.current?.state;
+    setOfflinePending(pending(state ?? null));
+    if (state) setSession(current => current?.status === "home" ? localHome(state) as HomeSession : current);
+  }, []);
+
+  const prepareMaterials = useCallback(async () => {
+    const store = storeRef.current, state = store?.state;
+    if (!store || !state || state.assetsReady || preparingRef.current) return;
+    preparingRef.current = true;
+    const sessionId = state.home.sessionId;
+    try {
+      await prepareOfflineAssets(state);
+      await store.change(current => {
+        if (current && current.home.sessionId === sessionId) current.assetsReady = true;
+        return current;
+      });
+    } catch { /* Retry on the next connection event; never block already cached tasks. */ }
+    finally { preparingRef.current = false; }
+  }, []);
+
+  const showLocalTask = useCallback((taskId: string) => {
+    const state = storeRef.current?.state;
+    const task = state?.tasks.find(t => t.taskId === taskId);
+    if (!state || !task || task.frozen || task.completed) return;
+    const previous = state.tasks.filter(t => t.taskOrder < task.taskOrder && (t.frozen || t.completed)).at(-1);
+    const input = previous?.latest?.inputReport;
+    let pausedAt = task.latest?.pauseStartedAt ?? new Date().toISOString();
+    try {
+      const marker = localStorage.getItem(pauseMarkerKey(state.home.sessionId, task.taskId));
+      if (!task.latest?.pauseStartedAt && marker && Number.isFinite(Date.parse(marker))) pausedAt = marker;
+    } catch { /* The durable draft remains authoritative if localStorage is unavailable. */ }
+    setSession({
+      ok: true, status: "active", participantId: state.home.participantId, caseSetId: state.home.caseSetId,
+      sessionId: state.home.sessionId, pausedAt, pausedTotalMs: 0,
+      progress: { completed: task.taskOrder - 1, total: 3 },
+      task: { taskId: task.taskId, taskOrder: task.taskOrder, caseId: task.caseId, condition: task.condition as StudyCondition,
+        stage: task.latest?.stage ?? 1, revision: task.revision, lastSavedAt: null, entry: task.latest,
+        requiresStartConfirmation: !task.latest?.startedAt,
+        previousInputReport: input ? { ...input, sourceTaskOrder: previous!.taskOrder } : null,
+        material: normalizeMaterial(task.material) },
+    });
+    setSaveState("已保存到本机");
+  }, []);
+
+  const loadBundle = useCallback(async () => {
+    const store = storeRef.current;
+    if (!store) throw new Error("本机存储尚未准备好");
+    const bundle = await api<any>("/api/offline/bundle");
+    const migrating = store.state?.home.sessionId !== bundle.home.sessionId;
+    await store.install(bundle);
+    // Import a compatible pre-upgrade draft without replacing a newer outbox.
+    const legacy = localStorage.getItem(DRAFT_KEY);
+    if (legacy && migrating) {
+      try {
+        const draft = JSON.parse(legacy);
+        const legacyPending = JSON.parse(localStorage.getItem(DRAFT_SYNC_KEY) ?? "null")?.pending;
+        const task = store.state?.tasks.find(t => t.caseId === draft.config?.caseId);
+        if (task && (!task.latest || legacyPending) && !task.completed && draft.config?.sessionId === bundle.home.sessionId) {
+          if (draft.stage === 6) await store.freeze(task.taskId, draft);
+          else await store.edit(task.taskId, draft);
+        }
+      } catch {
+        localWriteFailed.current = true;
+        setSyncProblem("旧版本机草稿暂未成功迁移，请勿清除浏览器数据，请联系研究者。");
+        throw new Error("请先处理旧版本机草稿，再开始任务。");
+      }
+    }
+    setSession(localHome(store.state!) as HomeSession);
+    refreshLocalHome();
+    syncRef.current?.schedule();
+    void prepareMaterials();
+  }, [prepareMaterials, refreshLocalHome]);
 
   const acceptSession = useCallback((next: SessionPayload) => {
-    if (next.status === "active") {
-      const normalized: ActiveSession = { ...next, task: { ...next.task, material: normalizeMaterial(next.task.material) } };
-      const pendingLocalDraft = readPendingLocalDraft(normalized);
-      const restored = pendingLocalDraft ? { ...normalized, task: { ...normalized.task, entry: pendingLocalDraft } } : normalized;
-      persistActiveTask(restored, pendingLocalDraft);
-      if (pendingResumeRef.current?.taskId !== restored.task.taskId || !restored.pausedAt) pendingResumeRef.current = null;
-      sessionRef.current = restored;
-      revisionRef.current = restored.task.revision;
-      pendingDraftRef.current = null;
-      setSession(restored);
-      setSaveState(pendingLocalDraft ? "已恢复尚未同步的本机记录 · 等待连接服务器" : restored.pausedAt ? "任务已暂停 · 点击继续后计时" : restored.task.lastSavedAt ? "已从服务器恢复" : "任务已创建");
-    } else {
-      pendingResumeRef.current = null;
-      sessionRef.current = null;
-      setSession(next);
+    const cached = storeRef.current?.state;
+    if (cached && pending(cached) && "sessionId" in next && next.sessionId !== cached.home.sessionId) {
+      setSyncProblem("还有原参与身份的记录未上传，请重新确认原邮箱，不要切换身份。");
+      if (syncRef.current) syncRef.current.blocked = true;
+      setSession(localHome(cached) as HomeSession);
+      return;
     }
-    lastServerActivityRef.current = Date.now();
-  }, []);
+    setSession(next);
+    if (next.status === "active" || (next.status === "home" && next.practice.completed)) {
+      void loadBundle().catch(error => setMessage((error as Error).message));
+    }
+  }, [loadBundle]);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([api<StudyStatus>("/api/status"), api<SessionPayload>("/api/participant/session")]).then(([nextStatus, nextSession]) => {
+    let release: (() => void) | undefined;
+    if (!navigator.locks) {
+      setMessage("当前浏览器不支持可靠的本机草稿管理，请使用新版 Chrome、Edge 或 Safari。");
+      return;
+    }
+    void navigator.locks.request(labStorageKey("single-writer"), { ifAvailable: true }, async lock => {
+      if (!lock) { setMessage("实验已在另一个标签页打开，请关闭其他实验页面后刷新。"); return; }
       if (cancelled) return;
-      setStatus(nextStatus);
-      acceptSession(nextSession);
-    }).catch(() => { if (!cancelled) setMessage("实验服务暂时不可用，请稍后重试或联系研究者。"); });
-    return () => { cancelled = true; };
-  }, [acceptSession]);
-
-  const flushDraft = useCallback(async () => {
-    const active = sessionRef.current;
-    const draft = pendingDraftRef.current;
-    if (!active || !draft || draft.config.caseId !== active.task.caseId) return;
-    pendingDraftRef.current = null;
-    const taskId = active.task.taskId;
-    saveQueueRef.current = saveQueueRef.current.then(async () => {
-      if (sessionRef.current?.task.taskId !== taskId) return;
-      const revision = revisionRef.current + 1;
-      setSaveState("正在同步到服务器…");
-      const result = await api<{ ok: true; revision: number }>("/api/task/save", { method: "POST", body: JSON.stringify({ taskId, revision, entry: draft }) });
-      revisionRef.current = result.revision;
-      persistDraftSyncState({ taskId, serverRevision: result.revision, pending: Boolean(pendingDraftRef.current) });
-      lastServerActivityRef.current = Date.now();
-      setSaveState("已自动保存到服务器");
-    }).catch((error) => {
-      pendingDraftRef.current = draft;
-      setSaveState(`服务器同步失败 · 本机副本仍在（${(error as Error).message}）`);
-    });
-    await saveQueueRef.current;
-  }, []);
-
-  const onDraftChange = useCallback((draft: StudyDraft) => {
-    pendingDraftRef.current = draft;
-    const taskId = sessionRef.current?.task.taskId;
-    if (taskId) persistDraftSyncState({ taskId, serverRevision: revisionRef.current, pending: true });
-    setSaveState("已保存到本机 · 等待同步");
-    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => void flushDraft(), 2000);
-  }, [flushDraft]);
-
-  const syncPendingResume = useCallback(() => {
-    if (resumeSyncPromiseRef.current) return resumeSyncPromiseRef.current;
-    const pending = pendingResumeRef.current;
-    const active = sessionRef.current;
-    if (!pending || !active || pending.taskId !== active.task.taskId) return Promise.resolve();
-    let operation!: Promise<void>;
-    operation = (async () => {
+      const held = new Promise<void>(resolve => { release = resolve; });
       try {
-        await api<{ ok: true }>("/api/session/resume", {
-          method: "POST",
-          body: JSON.stringify({ resumedAt: pending.resumedAt }),
+        const store = new OfflineStore(browserPersistence(labStorageKey("offline-outbox-v1")));
+        storeRef.current = store;
+        const cached = await store.load();
+        if (cancelled) return;
+        syncRef.current = new OfflineSync(store, error => {
+          if (cancelled) return;
+          if (error) setSyncProblem(error);
+          refreshLocalHome();
         });
-        if (pendingResumeRef.current === pending) pendingResumeRef.current = null;
-        if (sessionRef.current?.task.taskId === pending.taskId) {
-          sessionRef.current = { ...sessionRef.current, pausedAt: null };
+        setStorageReady(true);
+        if (cached) {
+          setStatus({ ok: true, databaseReady: true, caseSetId: cached.home.caseSetId, isOpen: true, llmMaterialsReady: true, canCreateSession: true });
+          setSession(localHome(cached) as HomeSession);
+          if (cached.activeTaskId) showLocalTask(cached.activeTaskId);
+          refreshLocalHome();
+          syncRef.current.schedule();
+          void prepareMaterials();
         }
-        lastServerActivityRef.current = Date.now();
-        setSaveState("任务已继续 · 已连接服务器");
+        try {
+          const [nextStatus, next] = await Promise.all([api<StudyStatus>("/api/status"), api<SessionPayload>("/api/participant/session")]);
+          if (cancelled) return;
+          setStatus(nextStatus);
+          if (!cached) acceptSession(next);
+          else if (next.status === "anonymous" || ("sessionId" in next && next.sessionId !== cached.home.sessionId)) {
+            setSyncProblem("需要重新确认原参与邮箱；本机记录仍保留。");
+          }
+          // Never overwrite an offline draft/view merely because the server is behind.
+        } catch {
+          if (!cached && !cancelled) setMessage("首次进入需要联网。请恢复网络后刷新；本机记录不会被清除。");
+        }
       } catch {
-        setSaveState("任务已继续 · 等待同步服务器");
-        throw new Error("resume_sync_failed");
-      } finally {
-        if (resumeSyncPromiseRef.current === operation) resumeSyncPromiseRef.current = null;
+        if (!cancelled) setMessage("本机存储无法使用，请勿开始实验或清除已有记录，请联系研究者。");
       }
-    })();
-    resumeSyncPromiseRef.current = operation;
-    return operation;
-  }, []);
+      await held;
+    });
+    return () => {
+      cancelled = true; syncRef.current?.stop();
+      const store = storeRef.current;
+      if (store) { store.closed = true; void store.queue.finally(() => release?.()); }
+      else release?.();
+    };
+  }, [acceptSession, prepareMaterials, refreshLocalHome, showLocalTask]);
+
+  const onDraftChange = useCallback(async (draft: StudyDraft) => {
+    const store = storeRef.current;
+    const task = store?.state?.tasks.find(t => t.caseId === draft.config.caseId && store.state?.home.sessionId === draft.config.sessionId);
+    if (!store || !task) throw new Error("本机任务尚未准备好");
+    try {
+      await store.edit(task.taskId, draft);
+      localWriteFailed.current = false;
+      setSaveState("已保存到本机");
+      refreshLocalHome();
+      syncRef.current?.schedule(2000);
+    } catch (error) {
+      localWriteFailed.current = true;
+      setSaveState("本机保存失败，请勿关闭页面");
+      throw error;
+    }
+  }, [refreshLocalHome]);
 
   useEffect(() => {
-    const heartbeat = window.setInterval(() => {
-      if (pendingResumeRef.current) {
-        void syncPendingResume().catch(() => undefined);
-        return;
+    const reconnect = () => { syncRef.current?.schedule(0, true); void prepareMaterials(); };
+    const visible = () => { if (document.visibilityState === "visible") reconnect(); };
+    const markPause = () => {
+      const state = storeRef.current?.state;
+      const task = state?.tasks.find(t => t.taskId === state.activeTaskId);
+      if (state && task && !task.frozen && !task.completed) {
+        try { localStorage.setItem(pauseMarkerKey(state.home.sessionId, task.taskId), task.latest?.pauseStartedAt ?? new Date().toISOString()); } catch {}
       }
-      if (!sessionRef.current || Date.now() - lastServerActivityRef.current < 29_000) return;
-      void api<{ ok: true }>("/api/session/heartbeat", { method: "POST", body: "{}" }).then(() => { lastServerActivityRef.current = Date.now(); }).catch(() => setSaveState("网络连接中断 · 记录仍保存在本机"));
+    };
+    const leaving = (event: BeforeUnloadEvent) => {
+      const store = storeRef.current;
+      if (localWriteFailed.current || store?.writes || pending(store?.state ?? null)) {
+        event.preventDefault(); event.returnValue = "";
+      }
+    };
+    window.addEventListener("online", reconnect);
+    window.addEventListener("beforeunload", leaving);
+    window.addEventListener("pagehide", markPause);
+    document.addEventListener("visibilitychange", visible);
+    const heartbeat = window.setInterval(() => {
+      if (!pending(storeRef.current?.state ?? null) && storeRef.current?.state?.activeTaskId) {
+        void api("/api/session/heartbeat", { method: "POST", body: "{}" }).catch(() => undefined);
+      }
+      void prepareMaterials();
     }, 30_000);
-    const resumeRetry = window.setInterval(() => {
-      if (pendingResumeRef.current) void syncPendingResume().catch(() => undefined);
-    }, 5_000);
-    const pauseForBackground = () => { if (document.visibilityState === "hidden" && sessionRef.current) { void flushDraft(); sendPauseBeacon(); } };
-    const pauseForExit = () => { if (sessionRef.current) sendPauseBeacon(); };
-    document.addEventListener("visibilitychange", pauseForBackground);
-    window.addEventListener("pagehide", pauseForExit);
-    return () => { window.clearInterval(heartbeat); window.clearInterval(resumeRetry); document.removeEventListener("visibilitychange", pauseForBackground); window.removeEventListener("pagehide", pauseForExit); };
-  }, [flushDraft, syncPendingResume]);
+    return () => { window.removeEventListener("online", reconnect); window.removeEventListener("beforeunload", leaving); window.removeEventListener("pagehide", markPause);
+      document.removeEventListener("visibilitychange", visible); clearInterval(heartbeat); };
+  }, [prepareMaterials]);
 
   const identify = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true); setMessage("");
     try {
-      clearLocalTask();
-      acceptSession(await api<SessionPayload>("/api/participant/start", { method: "POST", body: JSON.stringify({ email, acceptedRules }) }));
+      if (!storageReady) throw new Error("本机存储尚未准备好");
+      syncRef.current?.stop();
+      const next = await api<SessionPayload>("/api/participant/start", { method: "POST", body: JSON.stringify({ email, acceptedRules }) });
+      syncRef.current = new OfflineSync(storeRef.current!, error => {
+        if (error) setSyncProblem(error);
+        refreshLocalHome();
+      });
+      setSyncProblem("");
+      acceptSession(next);
       window.scrollTo({ top: 0, behavior: "auto" });
       window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
     } catch (error) { setMessage(error instanceof TypeError ? "暂时无法连接实验服务，请检查网络后重试。" : (error as Error).message); } finally { setBusy(false); }
@@ -513,20 +565,27 @@ export function OnlineEntry() {
   const completePractice = async () => {
     setBusy(true); setMessage("");
     try {
-      const next = await api<HomeSession>("/api/practice/complete", { method: "POST", body: JSON.stringify({ practiceVersion: 1, milestones: { observed: true, judged: true, drew: true, reviewed: true } }) });
+      const next = await api<HomeSession>("/api/practice/complete", { method: "POST", body: JSON.stringify({ practiceVersion: 1, completionMode: "walkthrough", viewedSteps: ["roadmap", "observation", "judgment", "outline", "skeleton", "review", "survey"] }) });
       setPracticeOpen(false);
       setNotice("新手引导已完成，你解锁了「拓片档案 · 一」！");
       acceptSession(next);
       window.scrollTo({ top: 0, behavior: "smooth" });
-    } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); }
+    } catch (error) { setMessage((error as Error).message); throw error; } finally { setBusy(false); }
   };
 
-  const openTask = async (task: HomeTaskPayload) => {
-    if (task.uiStatus === "locked" || task.uiStatus === "completed") return;
+  const openTask = async (card: HomeTaskPayload) => {
+    if (card.uiStatus === "locked" || card.uiStatus === "completed") return;
     setBusy(true); setMessage(""); setNotice("");
     try {
-      const next = await api<ActiveSession>("/api/task/open", { method: "POST", body: JSON.stringify({ taskOrder: task.taskOrder }) });
-      acceptSession(next);
+      if (localWriteFailed.current) throw new Error("本机记录尚未可靠保存，请勿关闭页面，请先联系研究者。");
+      if (!storeRef.current?.state) await loadBundle();
+      const store = storeRef.current!;
+      const currentCard = localHome(store.state!).tasks.find((t: HomeTaskPayload) => t.taskOrder === card.taskOrder);
+      if (!["ready", "active"].includes(currentCard?.uiStatus)) throw new Error("该任务尚未解锁");
+      if (!navigator.onLine && !store.state!.assetsReady) throw new Error("这项任务的离线材料尚未准备完整，请联网后再打开。");
+      const task = store.state!.tasks.find(t => t.taskOrder === card.taskOrder)!;
+      await store.change(state => { if (state) state.activeTaskId = task.taskId; return state; });
+      showLocalTask(task.taskId);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); }
   };
@@ -545,7 +604,6 @@ export function OnlineEntry() {
       method: "POST",
       body: JSON.stringify({ entry: draft }),
     });
-    clearLocalTask();
     setTutorialAuthoringSession(null);
     setNotice("两个字符的素材绘制已保存到本地 D1。");
     acceptSession(next);
@@ -553,38 +611,48 @@ export function OnlineEntry() {
   };
 
   const pause = useCallback(async () => {
-    await resumeSyncPromiseRef.current?.catch(() => undefined);
-    pendingResumeRef.current = null;
-    await flushDraft();
-    await api<{ ok: true }>("/api/session/pause", { method: "POST", body: "{}" });
-    lastServerActivityRef.current = Date.now(); setSaveState("任务已暂停");
-  }, [flushDraft]);
-
-  const resume = useCallback(async (resumedAt: string) => {
-    const active = sessionRef.current;
-    if (!active) return;
-    pendingResumeRef.current = { taskId: active.task.taskId, resumedAt };
-    setSaveState("任务已继续 · 正在同步服务器");
-    void syncPendingResume().catch(() => undefined);
-  }, [syncPendingResume]);
+    // Timing is in the local draft; background uploads never change the user's clock.
+  }, []);
+  const resume = useCallback(async (_resumedAt: string) => {
+    const state = storeRef.current?.state;
+    if (state?.activeTaskId) {
+      try { localStorage.removeItem(pauseMarkerKey(state.home.sessionId, state.activeTaskId)); } catch {}
+    }
+  }, []);
 
   const completeTask = useCallback(async (draft: StudyDraft) => {
-    pendingDraftRef.current = draft;
-    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-    await flushDraft(); await saveQueueRef.current;
-    const active = sessionRef.current;
-    if (!active) throw new Error("当前 session 已失效");
-    const result = await api<HomeSession>("/api/task/complete", { method: "POST", body: JSON.stringify({ taskId: active.task.taskId, revision: revisionRef.current + 1, entry: draft }) });
-    clearLocalTask();
-    setNotice(result.allCompleted ? "「拓片档案 · 一」已全部完成！请期待「拓片档案 · 二」" : "「拓片档案 · 一」中有新任务已解锁，请继续完成");
-    acceptSession(result);
+    const store = storeRef.current;
+    const task = store?.state?.tasks.find(t => t.caseId === draft.config.caseId && store.state?.home.sessionId === draft.config.sessionId);
+    if (!store || !task) throw new Error("本机任务不存在，请保留页面");
+    try {
+      await store.freeze(task.taskId, draft);
+      localWriteFailed.current = false;
+    } catch (error) {
+      localWriteFailed.current = true;
+      setSaveState("本机提交保存失败，请勿关闭页面");
+      throw error;
+    }
+    const home = localHome(store.state!) as HomeSession;
+    setSession(home); refreshLocalHome();
+    setNotice(home.allCompleted ? "「拓片档案 · 一」已全部完成！请期待「拓片档案 · 二」" : "「拓片档案 · 一」中有新任务已解锁，请继续完成");
+    syncRef.current?.schedule();
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [acceptSession, flushDraft]);
+  }, [refreshLocalHome]);
 
   const logout = async () => {
+    if (localWriteFailed.current || storeRef.current?.writes || pending(storeRef.current?.state ?? null)) {
+      setMessage("还有记录正在等待上传，请保持页面打开并联网。确认上传后再退出；请勿清除浏览器数据。");
+      syncRef.current?.schedule();
+      return;
+    }
     setBusy(true);
-    try { await api<{ ok: true }>("/api/participant/logout", { method: "POST", body: "{}" }); } catch { /* local reset remains useful if network is unavailable */ }
-    clearLocalTask(); setEmail(""); setAcceptedRules(false); setNotice(""); setMessage(""); setScreen("welcome"); setSession({ ok: true, status: "anonymous" }); setBusy(false);
+    try {
+      await api("/api/participant/logout", { method: "POST", body: "{}" });
+      await storeRef.current?.change(() => null);
+      clearLocalTask();
+      setEmail(""); setAcceptedRules(false); setNotice(""); setMessage(""); setScreen("welcome");
+      setSession({ ok: true, status: "anonymous" });
+    } catch { setMessage("暂时无法退出，请联网后重试。"); } finally { setBusy(false); }
   };
 
   const submitFeedback = async (feedbackMessage: string) => {
@@ -601,7 +669,11 @@ export function OnlineEntry() {
     setNotice("反馈已提交，谢谢。");
   };
 
-  if (!status || !session) return <main className="online-entry-shell"><section className="online-entry-card"><h1>正在连接实验服务器</h1><p>{message || "请稍候…"}</p></section></main>;
+  if (!storageReady || !status || !session) return <main className="online-entry-shell"><section className="online-entry-card"><h1>正在连接实验服务器</h1><p>{message || "请稍候…"}</p></section></main>;
+
+  const syncBanner = syncProblem ? <div className="online-message" role="alert">{syncProblem}
+    <button type="button" onClick={() => { setSession({ ok: true, status: "anonymous" }); setScreen("identity"); }}>重新确认邮箱</button>
+  </div> : null;
 
   if (tutorialAuthoringSession) {
     const authoringTask: OnlineStudyTask = {
@@ -616,17 +688,18 @@ export function OnlineEntry() {
       material: tutorialAuthoringSession.task.material,
       entry: null,
       pausedAt: null,
-      requiresStartConfirmation: true,
+      requiresStartConfirmation: false,
       previousInputReport: null,
       targetDrawingModes: tutorialAuthoringSession.task.targetDrawingModes,
       skipQuestionnaire: true,
+      authoringFromGuides: true,
     };
-    return <StudyApp key={authoringTask.taskId} onlineTask={authoringTask} onlineSaveState="本地素材制作·自动保存在本机" onTaskComplete={completeTutorialAuthoring} />;
+    return <StudyApp key={authoringTask.taskId} onlineTask={authoringTask} onTaskComplete={completeTutorialAuthoring} />;
   }
 
   if (session.status === "active") {
     const onlineTask: OnlineStudyTask = { taskId: session.task.taskId, config: configFor(session), material: session.task.material, entry: session.task.entry, pausedAt: session.pausedAt, requiresStartConfirmation: session.task.requiresStartConfirmation, previousInputReport: session.task.previousInputReport };
-    return <StudyApp key={session.task.taskId} onlineTask={onlineTask} onlineSaveState={saveState} onDraftChange={onDraftChange} onPause={pause} onResume={resume} onTaskComplete={completeTask} />;
+    return <>{syncBanner}<StudyApp key={session.task.taskId} localFirst onlineTask={onlineTask} onlineSaveState={saveState} onDraftChange={onDraftChange} onPause={pause} onResume={resume} onTaskComplete={completeTask} /></>;
   }
 
   if (session.status === "home") {
@@ -647,12 +720,13 @@ export function OnlineEntry() {
         requiresStartConfirmation: false,
         targetDrawingModes: { T01: "outline", T02: "skeleton" },
       };
-      return <StudyApp key={practiceTask.taskId} mode="practice" onlineTask={practiceTask} onlineSaveState="练习内容不记录" onPracticeExit={() => { setPracticeOpen(false); setMessage(""); window.scrollTo({ top: 0, behavior: "smooth" }); }} onTaskComplete={async () => completePractice()} />;
+      return <StudyApp key={practiceTask.taskId} mode="practice" onlineTask={practiceTask} onlineSaveState="流程预览 · 无需作答" onPracticeExit={() => { setPracticeOpen(false); setMessage(""); window.scrollTo({ top: 0, behavior: "smooth" }); }} onTaskComplete={async () => completePractice()} />;
     }
     const preloadImageUrl = session.practice.completed
       ? session.tasks.find((task) => task.uiStatus === "ready" || task.uiStatus === "active")?.preloadImageUrl ?? ""
       : practiceMaterialJson.pages[0]?.imageUrl ?? "";
-    return <><HomeView session={session} busy={busy} notice={notice || message} preloadImageUrl={preloadImageUrl} onPractice={() => { setPracticeOpen(true); setMessage(""); setNotice(""); window.scrollTo({ top: 0 }); }} onTutorialAuthoring={() => void openTutorialAuthoring()} onOpenTask={openTask} onFeedback={submitFeedback} onRepeat={() => void logout()} onLogout={() => void logout()} /></>;
+    return <>{syncBanner}<HomeView session={session} busy={busy} notice={message || notice} preloadImageUrl={preloadImageUrl} onPractice={() => { setPracticeOpen(true); setMessage(""); setNotice(""); window.scrollTo({ top: 0 }); }} onTutorialAuthoring={() => void openTutorialAuthoring()} onOpenTask={openTask} onFeedback={submitFeedback} onRepeat={() => void logout()} onLogout={() => void logout()} />
+      {offlinePending && session.allCompleted && <p className="online-message" role="status">任务已在本机完成，记录仍在后台上传。离开前请保持联网，等待此提示消失。</p>}</>;
   }
 
   const unavailable = !status.databaseReady ? "实验服务暂时不可用，请稍后重试或联系研究者。" : !status.isOpen ? "当前实验尚未开放，请联系研究者。" : !status.canCreateSession ? "实验材料正在准备中，暂时无法开始新任务。" : "";

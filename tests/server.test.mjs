@@ -71,7 +71,7 @@ test("lab local server preserves Worker API semantics and isolates subdirectory"
   });
   await t.test("save, pause, resume, heartbeat, survey completion preserve bytes and query", async () => {
     const entry = JSON.stringify({ taskId: "task-1", revision: 7, entry: { answers: [{ strokes: [{ x: 0.3, y: 0.7, pointerType: "pen" }] }], survey: { answer: "测试" }, padding: "x".repeat(1_100_000) } });
-    for (const route of ["task/save", "session/pause", "session/resume", "session/heartbeat", "task/complete", "practice/complete", "feedback"]) {
+    for (const route of ["task/save", "session/pause", "session/resume", "session/heartbeat", "task/complete", "practice/complete", "offline/sync", "feedback"]) {
       const response = await fetch(base + "/api/" + route + "?v=1", {
         method: "POST", headers: { origin: config.publicOrigin, "content-type": "application/json", cookie: "inscription_lab_test=abc; lab_account=secret" }, body: entry,
       });

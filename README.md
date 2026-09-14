@@ -10,6 +10,8 @@ https://www.musicxlab.com/inscription-system/
 
 **Music X Lab 管理人不需要配置 Cloudflare 账号、API Token、数据库账号或 Wrangler，也不需要创建第二个数据库。**
 
+2026-09-14 更新：新手引导改为七条点击式流程介绍，采用完整的 outline / skeleton 示例；正式任务新增本机冻结提交、断网恢复和后台补传。配套 Cloudflare Worker 与 D1 增量迁移已由研究者部署。Music X Lab 管理人只需按下方「后续更新」拉取、测试、构建并重启本服务。功能和缓存注意事项见 [离线同步说明](docs/offline_sync.md)。
+
 ## 分工与交付范围
 
 - **研究者**：维护独立 GitHub 公开仓库，确认访问地址，维护实验代码、材料、Cloudflare Worker 和 D1，并负责实验数据验收。
@@ -22,7 +24,7 @@ https://www.musicxlab.com/inscription-system/
 
 仓库包含 `app/`、`public/`、`study-materials/`、`scripts/`、`tests/`、`deploy/`、配置文件和 `package-lock.json`。处理后的实验图片已包含在 `public/` 中，构建不依赖外层研究目录，也不会临时处理原始拓片。
 
-不上传 `node_modules/`、`dist/`、参与者邮箱、问卷回答、笔画记录、D1 快照或登录凭据。问卷定义及练习起始笔画属于运行素材，可以随代码交付。
+不上传 `node_modules/`、`dist/`、参与者邮箱、问卷回答、实验笔画记录、D1 快照或登录凭据。问卷定义及研究者制作的完整教程示例笔画属于运行素材，可以随代码交付。
 
 当前为可信参与者测试版：处理后的图片可以直接访问，没有逐张图片鉴权；任务分配和条件相关材料 JSON 仍由现有 Worker 返回。未复制原始 GT 或研究者素材制作图片。
 
@@ -180,7 +182,7 @@ sudo systemctl status inscription-lab --no-pager
 
 ## 研究者：材料与实验数据管理
 
-`public/study-data/` 已包含目前三个正式 case 和新手练习所需的处理后图片，大图沿用 2048px 网页版。更换 case 时，研究者先用 `app-online` 的既有流程准备材料，再将参与者图片、练习 JSON 和练习起始笔画同步到本项目。
+`public/study-data/` 已包含目前三个正式 case 和新手引导所需的处理后图片，大图沿用 2048px 网页版。更换 case 时，研究者先用 `app-online` 的既有流程准备材料，再将参与者图片、引导 JSON 和完整示例笔画同步到本项目。
 
 完整正式材料 JSON、GT 和数据库不放进 `public/`；不要将原始材料目录作为静态目录公开。本项目运行不依赖这些原始文件。
 
@@ -220,7 +222,7 @@ npx playwright install chromium
 node scripts/browser_smoke.mjs
 ~~~
 
-浏览器测试检查欢迎页、登录、Dashboard 图片、刷新恢复、练习和退出。也可通过 `PLAYWRIGHT_MODULE` 指定已有 Playwright 模块，通过 `CHROME_PATH` 指定浏览器可执行文件。
+浏览器测试使用本地模拟 Worker，检查七条浏览式引导、子目录图片与缓存、刷新恢复、三任务离线提交、联网后补传、确认丢失后的重试及退出。不会写入真实 D1。也可通过 `PLAYWRIGHT_MODULE` 指定已有 Playwright 模块，通过 `CHROME_PATH` 指定浏览器可执行文件。
 
 本地验证不能证明 Music X Lab 网站服务器的网络连通性，也不代表已经发布到正式访问地址。
 
@@ -233,5 +235,6 @@ node scripts/browser_smoke.mjs
 - API 不缓存，保留 POST 正文、状态码、错误和清除 Cookie 的响应。
 - 构建资源和带版本号的图片使用长期浏览器缓存，替换图片时需同步新的版本 URL。
 - 上传上限与 Worker 相同，为 1,850,000 字节；Nginx 配置为 2m。
-- 超时或连接失败会返回错误，不假报保存成功，也不自动重放可能已写入 D1 的 POST。
+- Node 转发层超时或连接失败会返回错误，不自动重放 POST。浏览器仅对新保存接口使用已持久化的固定提交编号安全重试；本机完成与服务器收到是两个状态，不将未确认上传误报为已写入 D1。
+- 离线缓存和 Service Worker 只作用于实验子目录，不缓存 API，不接管 Music X Lab 网站首页或其他子目录。草稿、待上传记录和单标签页锁也按子目录隔离。
 - 本项目 Node 服务不将实验 API 正文、问卷回答或笔画记录写入本地文件或日志。
