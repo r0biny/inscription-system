@@ -3,7 +3,15 @@ import {startFixture} from "../tests/fixtures/mock_worker.mjs";
 import assert from "node:assert/strict";
 import {randomUUID} from "node:crypto";
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const fixture=await startFixture();
+let fixture=await startFixture();
+if(process.env.NGINX_BINARY){
+  const {startNginxFixture}=await import('../tests/fixtures/nginx_static.mjs');
+  const original=fixture;
+  let nginx;
+  try { nginx=await startNginxFixture(original.config); }
+  catch(error) { await original.close(); throw error; }
+  fixture={...original,...nginx,close:async()=>{await nginx.close();await original.close();}};
+}
 const base=fixture.base;
 assert.ok(["127.0.0.1","localhost"].includes(new URL(base).hostname));
 const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
