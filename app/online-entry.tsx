@@ -567,7 +567,7 @@ export function OnlineEntry() {
     try {
       const next = await api<HomeSession>("/api/practice/complete", { method: "POST", body: JSON.stringify({ practiceVersion: 1, completionMode: "walkthrough", viewedSteps: ["roadmap", "observation", "judgment", "outline", "skeleton", "review", "survey"] }) });
       setPracticeOpen(false);
-      setNotice("新手引导已完成，你解锁了「拓片档案 · 一」！");
+      setNotice("新手引导已完成，你解锁了新的「拓片档案」！");
       acceptSession(next);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) { setMessage((error as Error).message); throw error; } finally { setBusy(false); }
@@ -747,7 +747,7 @@ export function OnlineEntry() {
     <main className="online-entry-shell"><section className="online-entry-card join-card">
       <button className="join-back" onClick={() => { setScreen("welcome"); setMessage(""); }}>← 返回</button>
       <h1>开始前，请阅读参与说明</h1>
-      <div className="online-rules"><h2>参与规则</h2><ul><li>进入 Dashboard 后，请先完成一次 <strong>新手引导</strong>，再按顺序完成三项正式任务。三项任务会呈现不同的拓片材料、绘制方式与辅助条件；具体组合和顺序由系统预先随机安排。</li><li>请按自然节奏作答，不必刻意加快或等待。建议预留完整的5-10分钟，尽量连续完成三项正式任务。</li><li>页面会 <strong>自动保存</strong>。如需离开，请使用“暂停任务”，返回后可以继续完成。</li><li>请独立完成任务，不要使用搜索引擎、OCR、字典、其他模型或纸笔临摹，也请勿转发实验材料。</li></ul></div>
+      <div className="online-rules"><h2>参与规则</h2><ul><li>进入 Dashboard 后，请先完成一次 <strong>新手引导</strong>，再按顺序完成三项正式任务。三项任务会呈现不同的拓片材料、绘制方式与辅助条件；具体组合和顺序由系统预先随机安排。</li><li>请按自然节奏作答，不必刻意加快或等待。建议预留完整的5-10分钟，尽量连续完成三项正式任务。</li><li>页面会自动保存。<strong className="red-bold">如需离开，请使用“暂停任务”</strong>，返回后可以继续完成。</li><li>请独立完成任务，<strong className="red-bold">不要使用搜索引擎</strong><strong>、OCR、字典、其他模型或纸笔临摹</strong>，也请勿转发实验材料。</li></ul></div>
       <form className="online-identity-form" onSubmit={identify}>
         <label><span className="identity-field-label">邮箱</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} /><small className="identity-field-help">请始终使用同一个邮箱。该邮箱是识别参与身份、恢复进度以及今后继续参与新拓片任务的唯一依据。</small></label>
         <div className="online-rule-consent"><input id="identity-consent" type="checkbox" checked={acceptedRules} onChange={(event) => setAcceptedRules(event.target.checked)} required /><span><label htmlFor="identity-consent">我已阅读并同意遵守参与规则，并已阅读</label><button type="button" onClick={() => setDataRightsOpen(true)}>《数据与参与权利说明》</button>。</span></div>

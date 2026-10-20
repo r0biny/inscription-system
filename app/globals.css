@@ -26,6 +26,7 @@
 .online-rules li { position: relative; padding-left: 16px; font-size: 14px; line-height: 1.7; }
 .online-rules li::before { content: "•"; position: absolute; left: 0; color: var(--vermilion); font-weight: 700; }
 .online-rules strong { color: var(--ink); font-weight: 700; }
+.online-rules .red-bold, .data-rights-content .red-bold { color: var(--vermilion); font-weight: 700; }
 .rule-highlight { padding: 0 .08em; color: inherit; background: linear-gradient(transparent 58%, rgba(167, 55, 46, .26) 58%); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .online-identity-form { display: grid; gap: 18px; }
 .online-identity-form > label:not(.online-rule-consent) { display: grid; gap: 7px; font-size: 14px; font-weight: 650; }
