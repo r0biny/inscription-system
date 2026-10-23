@@ -13,8 +13,18 @@ test('Nginx-only deployment preserves study API, cookies, static scope and exist
     requests.push({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString(), method: req.method });
     res.setHeader('content-type', 'application/json');
     if (req.url === '/api/hold') { held.push(res); return; }
-    if (req.url === '/api/login') res.setHeader('set-cookie', 'paper1_session=abc; Domain=worker.invalid; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
-    if (req.url === '/api/logout') res.setHeader('set-cookie', 'paper1_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0');
+    if (req.url === '/api/login') res.setHeader('set-cookie', [
+      'paper1_session_archive_1=one; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000',
+      'paper1_session_archive_2=two; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000',
+      'paper1_session_archive_3=three; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000',
+      'paper1_active_archive=archive_2; Path=/; Secure; SameSite=Lax; Max-Age=2592000',
+    ]);
+    if (req.url === '/api/logout') res.setHeader('set-cookie', [
+      'paper1_session_archive_1=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0',
+      'paper1_session_archive_2=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0',
+      'paper1_session_archive_3=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0',
+      'paper1_active_archive=; Path=/; Secure; SameSite=Lax; Max-Age=0',
+    ]);
     if (req.url === '/api/unrelated-cookie') res.setHeader('set-cookie', 'unrelated=private; Path=/');
     if (req.url === '/api/conflict') { res.writeHead(409); return res.end('{"ok":false,"error":"revision_conflict"}'); }
     if (req.url === '/api/redirect') { res.writeHead(307, { location: workerOrigin + '/api/status?x=1' }); return res.end(); }
@@ -50,14 +60,20 @@ test('Nginx-only deployment preserves study API, cookies, static scope and exist
   await t.test('login/logout cookies preserve flags, remove Domain, and stay inside study', async () => {
     const login = await fetch(base + '/api/login', { method: 'POST', headers: { origin: lab.origin, cookie: 'unrelated=secret; paper1_session=other' }, body: '{}' });
     assert.equal(login.status, 200);
-    assert.equal(login.headers.get('set-cookie'), config.cookieName + '=abc; Path=' + config.basePath + '/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
+    const loginCookies = login.headers.getSetCookie();
+    assert.equal(loginCookies.length, 4);
+    assert.ok(loginCookies.some(cookie => cookie.startsWith(config.cookieName + '_archive_1=one;')));
+    assert.ok(loginCookies.some(cookie => cookie.startsWith(config.cookieName + '_archive_2=two;')));
+    assert.ok(loginCookies.some(cookie => cookie.startsWith(config.cookieName + '_archive_3=three;')));
+    assert.ok(loginCookies.some(cookie => cookie.startsWith(config.cookieName + '_active_archive=archive_2;')));
+    assert.ok(loginCookies.every(cookie => cookie.includes('Path=' + config.basePath + '/')));
     assert.equal(login.headers.get('cache-control'), 'no-store');
     assert.equal(requests.at(-1).headers.cookie, undefined);
     assert.equal(requests.at(-1).headers.origin, workerOrigin);
     const logout = await fetch(base + '/api/logout', { method: 'POST', body: '{}' });
-    assert.match(logout.headers.get('set-cookie'), /Max-Age=0/);
-    assert.ok(logout.headers.get('set-cookie').startsWith(config.cookieName + '=;'));
-    assert.equal((await fetch(base + '/api/unrelated-cookie')).headers.get('set-cookie'), null);
+    const logoutCookies = logout.headers.getSetCookie();
+    assert.equal(logoutCookies.length, 4);
+    assert.ok(logoutCookies.every(cookie => cookie.includes('Max-Age=0')));
   });
   await t.test('Origin rejection, exact body/query forwarding, isolated request headers', async () => {
     const count = requests.length;
@@ -65,11 +81,11 @@ test('Nginx-only deployment preserves study API, cookies, static scope and exist
     assert.equal(requests.length, count);
     const body = JSON.stringify({ text: '测试 /study-data/preserve', padding: 'x'.repeat(1_600_000) });
     for (const route of ['task/save', 'session/pause', 'session/resume', 'session/heartbeat', 'task/complete', 'practice/complete', 'offline/sync', 'feedback']) {
-      const response = await fetch(base + '/api/' + route + '?x=a%2Fb', { method: 'POST', headers: { origin: lab.origin, 'content-type': 'application/json', authorization: 'private', cookie: config.cookieName + '=abc; unrelated=private' }, body });
+      const response = await fetch(base + '/api/' + route + '?x=a%2Fb', { method: 'POST', headers: { origin: lab.origin, 'content-type': 'application/json', authorization: 'private', cookie: config.cookieName + '_archive_1=one; ' + config.cookieName + '_archive_2=two; ' + config.cookieName + '_archive_3=three; ' + config.cookieName + '_active_archive=archive_2; unrelated=private' }, body });
       assert.equal(response.status, 200);
       assert.equal(requests.at(-1).body, body);
       assert.equal(requests.at(-1).url, '/api/' + route + '?x=a%2Fb');
-      assert.equal(requests.at(-1).headers.cookie, 'paper1_session=abc');
+      assert.equal(requests.at(-1).headers.cookie, 'paper1_session_archive_1=one; paper1_session_archive_2=two; paper1_session_archive_3=three; paper1_active_archive=archive_2');
       assert.equal(requests.at(-1).headers.authorization, undefined);
     }
     assert.doesNotMatch(await lab.logs(), /buffered to a temporary file/);

@@ -4,7 +4,18 @@ import http from "node:http";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createAppServer } from "../server.mjs";
+import { browserCookie, createAppServer, upstreamCookie } from "../server.mjs";
+
+test("archive cookies are isolated and translated in both directions", () => {
+  const config = { cookieName: "inscription_lab_test", basePath: "/inscription-system" };
+  assert.equal(
+    upstreamCookie("inscription_lab_test_archive_1=one; inscription_lab_test_archive_2=two; inscription_lab_test_archive_3=three; inscription_lab_test_active_archive=archive_2; unrelated=private", config),
+    "paper1_session_archive_1=one; paper1_session_archive_2=two; paper1_session_archive_3=three; paper1_active_archive=archive_2",
+  );
+  assert.equal(browserCookie("paper1_session_archive_3=three; Path=/; HttpOnly; Secure", config), "inscription_lab_test_archive_3=three; Path=/inscription-system/; HttpOnly; Secure");
+  assert.equal(browserCookie("paper1_active_archive=archive_3; Path=/; Secure", config), "inscription_lab_test_active_archive=archive_3; Path=/inscription-system/; Secure");
+  assert.equal(browserCookie("unrelated=private; Path=/", config), null);
+});
 
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -27,8 +38,8 @@ test("lab local server preserves Worker API semantics and isolates subdirectory"
       return res.end('{"ok":false,"error":"revision_conflict"}');
     }
     res.setHeader("content-type", "application/json");
-    if (req.url === "/api/participant/start") res.setHeader("set-cookie", "paper1_session=abc; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000");
-    if (req.url === "/api/participant/logout") res.setHeader("set-cookie", "paper1_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");
+    if (req.url === "/api/participant/start") res.setHeader("set-cookie", "paper1_session_archive_1=one; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000");
+    if (req.url === "/api/participant/logout") res.setHeader("set-cookie", "paper1_session_archive_1=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");
     res.end('{"ok":true,"databaseReady":true}');
   });
   const upstreamOrigin = await listen(upstream);
@@ -60,9 +71,8 @@ test("lab local server preserves Worker API semantics and isolates subdirectory"
     });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.match(response.headers.get("set-cookie"), /^inscription_lab_test=abc;/);
+    assert.match(response.headers.get("set-cookie"), /^inscription_lab_test_archive_1=one;/);
     assert.match(response.headers.get("set-cookie"), /Path=\/inscription-system\//);
-    assert.match(response.headers.get("set-cookie"), /HttpOnly; Secure; SameSite=Lax/);
     assert.equal(requests.at(-1).headers.origin, upstreamOrigin);
     assert.equal(requests.at(-1).headers.cookie, undefined);
     const count = requests.length;
@@ -73,11 +83,11 @@ test("lab local server preserves Worker API semantics and isolates subdirectory"
     const entry = JSON.stringify({ taskId: "task-1", revision: 7, entry: { answers: [{ strokes: [{ x: 0.3, y: 0.7, pointerType: "pen" }] }], survey: { answer: "测试" }, padding: "x".repeat(1_100_000) } });
     for (const route of ["task/save", "session/pause", "session/resume", "session/heartbeat", "task/complete", "practice/complete", "offline/sync", "feedback"]) {
       const response = await fetch(base + "/api/" + route + "?v=1", {
-        method: "POST", headers: { origin: config.publicOrigin, "content-type": "application/json", cookie: "inscription_lab_test=abc; lab_account=secret" }, body: entry,
+        method: "POST", headers: { origin: config.publicOrigin, "content-type": "application/json", cookie: "inscription_lab_test_archive_1=one; inscription_lab_test_archive_2=two; inscription_lab_test_archive_3=three; inscription_lab_test_active_archive=archive_2; lab_account=secret" }, body: entry,
       });
       assert.equal(response.status, 200);
       assert.equal(requests.at(-1).url, "/api/" + route + "?v=1");
-      assert.equal(requests.at(-1).headers.cookie, "paper1_session=abc");
+      assert.equal(requests.at(-1).headers.cookie, "paper1_session_archive_1=one; paper1_session_archive_2=two; paper1_session_archive_3=three; paper1_active_archive=archive_2");
       assert.equal(requests.at(-1).body, entry);
     }
   });
@@ -86,7 +96,7 @@ test("lab local server preserves Worker API semantics and isolates subdirectory"
     assert.equal(conflict.status, 409);
     assert.equal((await conflict.json()).error, "revision_conflict");
     const logout = await fetch(base + "/api/participant/logout", { method: "POST", body: "{}" });
-    assert.match(logout.headers.get("set-cookie"), /inscription_lab_test=;/);
+    assert.match(logout.headers.get("set-cookie"), /^inscription_lab_test_archive_1=;/);
     assert.match(logout.headers.get("set-cookie"), /Max-Age=0/);
     const count = requests.length;
     assert.equal((await fetch(base + "/api/task/save", { method: "POST", body: "x".repeat(1_850_001) })).status, 413);

@@ -6,7 +6,7 @@ import { readConfig } from '../lab_config.mjs';
 const quote = (value) => '"' + String(value).replaceAll('\\', '/').replaceAll('"', '\\"') + '"';
 const regex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Stock Nginx adapter for this Worker's single paper1_session cookie contract.
+// Stock Nginx adapter for the Worker's per-archive session cookie contract.
 // Build on a workstation; production needs neither Node nor a new daemon.
 export function nginxStaticConfig(config, options = {}) {
   const base = config.basePath;
@@ -29,23 +29,25 @@ map $http_origin $inscription_upstream_origin {
     "" "";
     default ${quote(config.upstreamOrigin)};
 }
-map $cookie_${config.cookieName} $inscription_upstream_cookie {
+map $cookie_${config.cookieName} $inscription_cookie_legacy {
     "" "";
-    default "paper1_session=$cookie_${config.cookieName}";
+    default "paper1_session=$cookie_${config.cookieName}; ";
 }
-# The Worker issues one session cookie. Preserve its flags and expiry, rename
-# only this cookie, remove Domain, and scope its Path to the experiment.
-map $upstream_http_set_cookie $inscription_cookie_named {
-    default "";
-    "~^paper1_session=(?<inscription_cookie_body>.*)$" "${config.cookieName}=$inscription_cookie_body";
+map $cookie_${config.cookieName}_archive_1 $inscription_cookie_archive_1 {
+    "" "";
+    default "paper1_session_archive_1=$cookie_${config.cookieName}_archive_1; ";
 }
-map $inscription_cookie_named $inscription_cookie_no_domain {
-    default $inscription_cookie_named;
-    "~*^(?<inscription_before_domain>.*);\\s*Domain=[^;]*(?<inscription_after_domain>.*)$" "$inscription_before_domain$inscription_after_domain";
+map $cookie_${config.cookieName}_archive_2 $inscription_cookie_archive_2 {
+    "" "";
+    default "paper1_session_archive_2=$cookie_${config.cookieName}_archive_2; ";
 }
-map $inscription_cookie_no_domain $inscription_response_cookie {
-    default $inscription_cookie_no_domain;
-    "~*^(?<inscription_before_path>.*);\\s*Path=[^;]*(?<inscription_after_path>.*)$" "$inscription_before_path; Path=${base}/$inscription_after_path";
+map $cookie_${config.cookieName}_archive_3 $inscription_cookie_archive_3 {
+    "" "";
+    default "paper1_session_archive_3=$cookie_${config.cookieName}_archive_3; ";
+}
+map $cookie_${config.cookieName}_active_archive $inscription_cookie_active_archive {
+    "" "";
+    default "paper1_active_archive=$cookie_${config.cookieName}_active_archive";
 }
 map $request_uri $inscription_worker_uri {
     default "";
@@ -65,7 +67,6 @@ map $upstream_http_location $inscription_redirect_target {
 }
 `;
   const apiHeaders = `    add_header Cache-Control "no-store" always;
-    add_header Set-Cookie $inscription_response_cookie always;
     add_header X-Content-Type-Options "nosniff" always;`;
   const locations = `# Generated from deployment.json; include inside the main HTTPS server only.
 location = ${base} {
@@ -91,7 +92,7 @@ location ^~ ${base}/api/ {
     proxy_set_header Content-Type $http_content_type;
     proxy_set_header User-Agent $http_user_agent;
     proxy_set_header Origin $inscription_upstream_origin;
-    proxy_set_header Cookie $inscription_upstream_cookie;
+    proxy_set_header Cookie "$inscription_cookie_legacy$inscription_cookie_archive_1$inscription_cookie_archive_2$inscription_cookie_archive_3$inscription_cookie_active_archive";
 ${upstream.protocol === 'https:' ? `    proxy_ssl_server_name on;
     proxy_ssl_name ${quote(upstream.hostname)};
     proxy_ssl_verify on;
@@ -107,7 +108,12 @@ ${upstream.protocol === 'https:' ? `    proxy_ssl_server_name on;
     proxy_connect_timeout 8s;
     proxy_read_timeout 30s;
     proxy_send_timeout 30s;
-    proxy_hide_header Set-Cookie;
+    proxy_cookie_name paper1_session ${config.cookieName};
+    proxy_cookie_name paper1_session_archive_1 ${config.cookieName}_archive_1;
+    proxy_cookie_name paper1_session_archive_2 ${config.cookieName}_archive_2;
+    proxy_cookie_name paper1_session_archive_3 ${config.cookieName}_archive_3;
+    proxy_cookie_name paper1_active_archive ${config.cookieName}_active_archive;
+    proxy_cookie_path / ${base}/;
     proxy_hide_header Cache-Control;
     proxy_hide_header Expires;
     proxy_hide_header Location;

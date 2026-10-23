@@ -12,7 +12,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type CSSProperties,
 } from "react";
-import { ArrowLeft, Bug, Download, ImageIcon, Pause, Play, Redo2, Trash2, Undo2, X, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bug, Download, Home, ImageIcon, MessageCircle, Pause, Play, Redo2, Trash2, Undo2, type LucideIcon } from "lucide-react";
+import { FeedbackDialog } from "./components/feedback_dialog";
 import { labStorageKey } from "./lab_runtime";
 import {
   getConditionLabel,
@@ -31,13 +32,14 @@ import {
   type HeritageViewportState,
 } from "./components/heritage-viewer";
 import practiceDrawingGuidesJson from "../study-materials/practice-drawing-guides.json";
+import { userInputDisplayCharacter } from "../scripts/simplified_traditional_variants.mjs";
 
 type Stage = 1 | 2 | 3 | 4 | 5 | 6;
 type Tool = "brush" | "eraser";
 type Point = { x: number; y: number };
 type DetectedPointerType = "mouse" | "pen" | "touch" | "unknown";
 type Stroke = { id?: string; tool: Tool; width: number; points: Point[]; pointerType?: DetectedPointerType };
-type SelectionSource = "ranked" | "custom" | null;
+type SelectionSource = "ranked" | "custom" | "fixed" | null;
 export type ReportedDevice = "computer" | "tablet" | "other";
 export type ReportedInputMethod = "mouse" | "trackpad" | "touch" | "stylus" | "other";
 export type PreviousInputReport = {
@@ -70,6 +72,7 @@ type CharacterAnswer = {
   strokes: Stroke[];
   characterConfidence: number | null;
   drawingConfidence: number | null;
+  characterDifficulty: number | null;
   finalDrawingPng: string | null;
 };
 
@@ -293,6 +296,7 @@ const blankAnswer = (): CharacterAnswer => ({
   strokes: [],
   characterConfidence: null,
   drawingConfidence: null,
+  characterDifficulty: null,
   finalDrawingPng: null,
 });
 
@@ -326,7 +330,9 @@ function createDraft(config: StudyConfig, studyCase: StudyCase, previousInputRep
     } : null,
     stageEnteredAt: { 1: startedAt },
     stageCompletedAt: {},
-    answers: Object.fromEntries(studyCase.targets.map((target) => [target.id, blankAnswer()])),
+    answers: Object.fromEntries(studyCase.targets.map((target) => [target.id, setting.assistanceMode === "fixed"
+      ? { ...blankAnswer(), hypothesis: target.transcription, selectionSource: "fixed" as const }
+      : blankAnswer()])),
     drawingSettings: { ...DEFAULT_DRAWING_SETTINGS, brushWidth: defaultBrushWidth(setting.drawingMode) },
     reviewNote: "",
     difficulty: null,
@@ -878,6 +884,15 @@ function CharacterNav({ studyCase, activeId, answers, mode, onSelect }: { studyC
 
 const candidateDisplayPercent = (candidate: TargetCharacter["candidates"][number]) => Math.round(candidate.confidence * 100);
 const visibleCandidates = (target: TargetCharacter) => target.candidates.filter((candidate) => candidateDisplayPercent(candidate) > 0);
+const candidateDisplayText = (candidate: TargetCharacter["candidates"][number]) => candidate.displayCharacter || candidate.character;
+const candidateDisplayClass = (candidate: TargetCharacter["candidates"][number]) => `candidate-form-count-${candidateDisplayText(candidate).split("/").length}`;
+const displayFormClass = (value: string) => `candidate-form-count-${value.split("/").length}`;
+const answerDisplayText = (target: TargetCharacter, answer: CharacterAnswer) => {
+  if (answer.selectionSource === "custom") return userInputDisplayCharacter(answer.hypothesis);
+  if (answer.selectionSource !== "ranked" || answer.candidateRank === null) return answer.hypothesis;
+  const candidate = target.candidates.find((item) => item.rank === answer.candidateRank);
+  return candidate ? candidateDisplayText(candidate) : answer.hypothesis;
+};
 
 function AiPanel({ studyCase, target, pageId, compact = false, showAll = false }: { studyCase: StudyCase; target: TargetCharacter; pageId: number; compact?: boolean; showAll?: boolean }) {
   const page = getStudyPage(studyCase, pageId);
@@ -909,14 +924,14 @@ function AiPanel({ studyCase, target, pageId, compact = false, showAll = false }
               <div className="candidate-target-row" key={item.id}>
                 <span className="candidate-target-index">{item.id}</span>
                 <span className="small-label">{item.label} · P{String(studyCase.pages.findIndex((pageItem) => pageItem.id === item.pageId) + 1).padStart(2, "0")}</span>
-                <div>{visibleCandidates(item).length ? visibleCandidates(item).map((candidate) => <span key={candidate.rank}><b>{candidate.rank}</b>{candidate.character}</span>) : <em>暂无非零候选</em>}</div>
+                <div>{visibleCandidates(item).length ? visibleCandidates(item).map((candidate) => <span className={candidateDisplayClass(candidate)} key={candidate.rank}><b>{candidate.rank}</b>{candidateDisplayText(candidate)}</span>) : <em>暂无非零候选</em>}</div>
               </div>
             ))}
           </div>
         ) : (
           <div className="ai-candidates-readonly">
             <span className="small-label">{target.label}</span>
-            <div>{visibleCandidates(target).length ? visibleCandidates(target).map((candidate) => <span key={candidate.rank}><b>{candidate.rank}</b>{candidate.character}</span>) : <em>暂无非零候选</em>}</div>
+            <div>{visibleCandidates(target).length ? visibleCandidates(target).map((candidate) => <span className={candidateDisplayClass(candidate)} key={candidate.rank}><b>{candidate.rank}</b>{candidateDisplayText(candidate)}</span>) : <em>暂无非零候选</em>}</div>
           </div>
         )}
       </div>
@@ -949,7 +964,7 @@ function ObservationDamageStrip({
         const number = observationTargetNumber(studyCase, target);
         return (
           <button type="button" key={target.id} className={target.id === activeId ? "is-active" : ""} onClick={() => onSelect(target.id)}>
-            <img src={target.glyphUrl} alt={`目标 ${number} 的残损局部`} width={54} height={54} decoding="async" />
+            <img src={target.glyphUrl} alt={`目标 ${number} 的残损局部`} width={54} height={54} />
             <span><strong>目标 {number}</strong>{showDamageSummary && <DamageSummary target={target} />}</span>
           </button>
         );
@@ -966,7 +981,7 @@ function ObservationCandidateText({ studyCase, target }: { studyCase: StudyCase;
       {candidates.length
         ? candidates.map((candidate) => (
           <span key={candidate.rank}>
-            <strong>{candidate.character}</strong>
+            <strong className={candidateDisplayClass(candidate)}>{candidateDisplayText(candidate)}</strong>
             <small>{candidateDisplayPercent(candidate)}%</small>
           </span>
         ))
@@ -1134,7 +1149,7 @@ function JudgmentEvidenceCard({
 
   return (
     <section className="judgment-evidence-card" aria-label={`目标 ${number} 的判断证据`}>
-      <img src={target.glyphUrl} alt={`目标 ${number} 的残损局部`} width={82} height={82} decoding="async" />
+      <img src={target.glyphUrl} alt={`目标 ${number} 的残损局部`} width={82} height={82} />
       <div className="judgment-evidence-fields">
         <div className="judgment-evidence-field"><b>上下文</b><ObservationTargetContext studyCase={studyCase} target={target} radius={10} multiline /></div>
         <div className="judgment-evidence-field">
@@ -1148,7 +1163,7 @@ function JudgmentEvidenceCard({
                 aria-pressed={answer.selectionSource === "ranked" && answer.candidateRank === candidate.rank}
                 onClick={() => onCandidateSelect(candidate)}
               >
-                <strong>{candidate.character}</strong>
+                <strong className={candidateDisplayClass(candidate)}>{candidateDisplayText(candidate)}</strong>
                 <small>{candidateDisplayPercent(candidate)}%</small>
               </button>
             ))}
@@ -1168,11 +1183,13 @@ function ObservationAiPanel({
   pageId,
   activeId,
   onSelect,
+  fixed = false,
 }: {
   studyCase: StudyCase;
   pageId: number;
   activeId: string | null;
   onSelect: (id: string) => void;
+  fixed?: boolean;
 }) {
   const page = getStudyPage(studyCase, pageId);
   const pageTargets = studyCase.targets.filter((target) => target.pageId === pageId);
@@ -1184,10 +1201,10 @@ function ObservationAiPanel({
 
   return (
     <aside className="observation-ai-panel">
-      <ParallelPanelHeading title="AI 转录与字符候选" />
+      <ParallelPanelHeading title={fixed ? "转录文本与目标字符" : "AI 转录与字符候选"} />
       <div className="parallel-panel-body observation-ai-body">
         <section className="step1-transcription-section">
-          <div className="step1-section-label"><span className="small-label">AI 转录文本</span></div>
+          <div className="step1-section-label"><span className="small-label">{fixed ? "转录文本" : "AI 转录文本"}</span></div>
           <div className="step1-transcription-flow is-horizontal" aria-label={`${page.label}转录文本，根据可用宽度自动换行`}>
             {Array.from(page.transcription).map((character, index) => {
               if (/\s/u.test(character)) return <span key={`space-${index}`}>{character}</span>;
@@ -1203,19 +1220,19 @@ function ObservationAiPanel({
             })}
           </div>
         </section>
-        <section className="step1-prediction-list progressive-prediction-list" aria-label="AI 预测字符候选">
-          <div className="step1-section-label"><span className="small-label">AI 预测字符候选</span></div>
+        <section className="step1-prediction-list progressive-prediction-list" aria-label={fixed ? "目标字符" : "AI 预测字符候选"}>
+          <div className="step1-section-label"><span className="small-label">{fixed ? "目标字符" : "AI 预测字符候选"}</span></div>
           {pageTargets.length === 0 && <p className="step1-empty-predictions">本页没有需要处理的目标字符</p>}
           {pageTargets.map((target) => {
             const number = observationTargetNumber(studyCase, target);
             const active = target.id === activeId;
             return (
               <button type="button" key={target.id} className={`is-expanded ${active ? "is-active" : ""}`} aria-pressed={active} onClick={() => onSelect(target.id)}>
-                <span className="progressive-target-title"><span className="step1-target-index">{number}</span><strong>目标{number}</strong><DamageSummary target={target} /></span>
-                <img src={target.glyphUrl} alt={`目标 ${number} 的残损局部`} width={82} height={82} decoding="async" />
+                <span className="progressive-target-title"><span className="step1-target-index">{number}</span><strong>目标{number}</strong>{!fixed && <DamageSummary target={target} />}</span>
+                <img src={target.glyphUrl} alt={`目标 ${number} 的残损局部`} width={82} height={82} />
                 <span className="progressive-evidence-fields">
                   <span className="progressive-evidence-field"><b>上下文</b><ObservationTargetContext studyCase={studyCase} target={target} radius={10} multiline /></span>
-                  <span className="progressive-evidence-field"><b>候选字</b><ObservationCandidateText studyCase={studyCase} target={target} /></span>
+                  <span className="progressive-evidence-field"><b>{fixed ? "确定字符" : "候选字"}</b>{fixed ? <strong className="step1-fixed-character">{target.transcription}</strong> : <ObservationCandidateText studyCase={studyCase} target={target} />}</span>
                 </span>
               </button>
             );
@@ -1230,7 +1247,7 @@ function Rating({ value, onChange, label, lowLabel, highLabel }: { value: number
   return (
     <div className="rating-scale">
       <div className="rating-row" role="group" aria-label={`${label}，1 表示${lowLabel}，5 表示${highLabel}`}>
-        {[1, 2, 3, 4, 5].map((score) => <button key={score} className={value === score ? "is-selected" : ""} onClick={() => onChange(score)}>{score}</button>)}
+        {[1, 2, 3, 4, 5].map((score) => <button type="button" key={score} className={value === score ? "is-selected" : ""} onClick={() => onChange(score)}>{score}</button>)}
       </div>
       <div className="rating-endpoints" aria-hidden="true"><span>{lowLabel}</span><span>{highLabel}</span></div>
     </div>
@@ -1292,19 +1309,18 @@ function TransitionModal({ transition, onCancel, onConfirm }: { transition: Tran
   );
 }
 
-function TaskIntroModal({ taskOrder, drawingName, assisted, mixed, busy, onStart }: { taskOrder: number; drawingName: "skeleton" | "outline"; assisted: boolean; mixed?: boolean; busy: boolean; onStart: () => void }) {
-  const drawingDescription = drawingName === "outline"
-    ? "绘制修复字符的完整外轮廓（outline）"
-    : "绘制修复字符的主要结构骨架（skeleton）";
-  const assistanceDescription = assisted
+function TaskIntroModal({ taskOrder, drawingName, assisted, fixed, mixed, busy, onStart }: { taskOrder: number; drawingName: "skeleton" | "outline"; assisted: boolean; fixed?: boolean; mixed?: boolean; busy: boolean; onStart: () => void }) {
+  const assistanceDescription = fixed
+    ? "本任务将直接显示已经确定的转录字符。"
+    : assisted
     ? "本任务提供 LLM 转录上下文与 Top-5 候选字辅助。"
     : "本任务不提供 LLM 辅助，需要独立判断字符。";
   return (
     <div className="modal-backdrop" role="presentation">
       <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="task-intro-title">
-        <span className="modal-index">{mixed ? "LOCAL AUTHORING" : `TASK ${String(taskOrder).padStart(2, "0")} / 03`}</span>
+        <span className="modal-index">{mixed ? "LOCAL AUTHORING" : fixed ? "REAL CASE" : `TASK ${String(taskOrder).padStart(2, "0")} / 03`}</span>
         <h2 id="task-intro-title">{mixed ? "新手引导素材制作" : `第 ${taskOrder} 个任务已准备好`}</h2>
-        <p>{mixed ? "本地任务包含两个字符：先为“郷”绘制 outline，再为“述”绘制 skeleton。切换字符时，页面标题与画笔粗细会自动切换。" : `本任务需要${drawingDescription}。`}{!mixed && assistanceDescription}<br />点击开始后才会继续计时。</p>
+        <p>{mixed ? <>本地任务包含两个字符：先为“郷”绘制 <strong className="red-bold">外轮廓（Outline）</strong>，再为“述”绘制 <strong className="red-bold">字符骨架（Skeleton）</strong>。切换字符时，页面标题与画笔粗细会自动切换。</> : <>本任务需要 {drawingName === "outline" ? <><span>绘制修复字符的</span> <strong className="red-bold">外轮廓（Outline）</strong></> : <><span>绘制修复字符的</span> <strong className="red-bold">字符骨架（Skeleton）</strong></>}。</>}{!mixed && assistanceDescription}<br />点击开始后才会继续计时。</p>
         <div className="modal-actions"><button className="primary-button" disabled={busy} onClick={onStart} autoFocus>{busy ? "正在开始…" : mixed ? "开始素材制作" : `开始第 ${taskOrder} 个任务`}<span>→</span></button></div>
       </div>
     </div>
@@ -1428,6 +1444,7 @@ function StageAdvanceButton({ label, disabledReason, onClick }: { label: string;
 
 export type OnlineStudyTask = {
   taskId: string;
+  participantEmail?: string;
   config: StudyConfig;
   material: StudyCase;
   entry: Record<string, unknown> | null;
@@ -1450,6 +1467,8 @@ type StudyAppProps = {
   onResume?: (resumedAt: string) => Promise<void>;
   onTaskComplete?: (draft: StudyDraft) => Promise<void>;
   onPracticeExit?: () => void;
+  onFeedback?: (message: string) => Promise<void>;
+  onReturnDashboard?: (draft: StudyDraft) => Promise<void>;
 };
 
 export function StudyApp({
@@ -1463,6 +1482,8 @@ export function StudyApp({
   onResume,
   onTaskComplete,
   onPracticeExit,
+  onFeedback,
+  onReturnDashboard,
 }: StudyAppProps) {
   const isOnline = Boolean(onlineTask);
   const isPractice = mode === "practice";
@@ -1482,6 +1503,8 @@ export function StudyApp({
   const [focusRequestKey, setFocusRequestKey] = useState(0);
   const [practiceCompletionError, setPracticeCompletionError] = useState("");
   const [practiceDrawingPhase, setPracticeDrawingPhase] = useState<PracticeDrawingPhase>("outline");
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [returningToDashboard, setReturningToDashboard] = useState(false);
   const viewportStateCache = useRef<Record<number, HeritageViewportState>>({});
 
   useEffect(() => {
@@ -1512,6 +1535,9 @@ export function StudyApp({
         restored = { ...restored, stage: 3, pauseStartedAt: null,
           restorationSubmittedAt: null, questionnaireSubmittedAt: null,
           answers: Object.fromEntries(Object.entries(restored.answers).map(([id, answer]) => [id, { ...answer, finalDrawingPng: null }])) };
+      }
+      if (getStudyCondition(restored.config.condition).assistanceMode === "fixed" && restored.stage === 2) {
+        restored = { ...restored, stage: 3 };
       }
       setDraft(onlineTask?.pausedAt && !restored.pauseStartedAt ? { ...restored, pauseStartedAt: onlineTask.pausedAt } : restored);
     } catch {
@@ -1592,11 +1618,27 @@ export function StudyApp({
       ? { ...conditionSetting, drawingMode: practiceDrawingPhase }
       : { ...conditionSetting, drawingMode: activeDrawingMode };
   const isAi = setting.assistanceMode === "llm";
+  const isRealCase = setting.assistanceMode === "fixed";
+  const showsTranscription = isAi || isRealCase;
   const isOutline = setting.drawingMode === "outline";
   const drawingName = isOutline ? "outline" : "skeleton";
-  const drawingNameZh = isOutline ? "轮廓" : "骨架";
+  const drawingNameZh = isOutline ? "外轮廓（Outline）" : "字符骨架（Skeleton）";
+  const drawingLabel = drawingNameZh;
   const drawingNameForTarget = (targetId: string) => (mixedDrawingModes?.[targetId] ?? setting.drawingMode) === "outline" ? "轮廓" : "骨架";
-  const steps = ["整体观察", "字符判断", mixedDrawingModes ? "绘制修复" : isOutline ? "轮廓绘制" : "骨架绘制", "检查并提交", onlineTask?.skipQuestionnaire ? "完成" : "完成问卷"];
+  const steps = isRealCase
+    ? [
+        { stage: 1, label: "整体观察" },
+        { stage: 3, label: "绘制修复" },
+        { stage: 4, label: "检查并提交" },
+        { stage: 5, label: onlineTask?.skipQuestionnaire ? "完成" : "完成问卷" },
+      ]
+    : [
+        { stage: 1, label: "整体观察" },
+        { stage: 2, label: "字符判断" },
+        { stage: 3, label: mixedDrawingModes ? "绘制修复" : isOutline ? "轮廓绘制" : "骨架绘制" },
+        { stage: 4, label: "检查并提交" },
+        { stage: 5, label: onlineTask?.skipQuestionnaire ? "完成" : "完成问卷" },
+      ];
   const visibleStage = Math.min(draft.stage, 5);
 
   const recordEvent = (type: string, characterId?: string, detail?: string) =>
@@ -1692,6 +1734,27 @@ export function StudyApp({
     if (onPause) void onPause();
   };
 
+  const returnToDashboard = async () => {
+    if (!onReturnDashboard || returningToDashboard) return;
+    const at = now();
+    const pausedDraft = draft.pauseStartedAt ? draft : {
+      ...draft,
+      pauseStartedAt: at,
+      events: [...draft.events, { at, type: "task_paused", detail: `stage:${draft.stage}` }],
+    };
+    setTransition(null);
+    setDraft(pausedDraft);
+    setReturningToDashboard(true);
+    try {
+      await onPause?.();
+      await onReturnDashboard(pausedDraft);
+    } catch (error) {
+      setSaveState((error as Error).message || "返回 Dashboard 失败，请重试");
+    } finally {
+      setReturningToDashboard(false);
+    }
+  };
+
   const resumeTask = () => {
     const at = now();
     setDraft((current) => {
@@ -1724,7 +1787,7 @@ export function StudyApp({
       if (!current) return current;
       const completedAt = { ...current.stageCompletedAt, [current.stage]: at };
       let answers = stage === 5
-        ? Object.fromEntries(Object.entries(current.answers).map(([id, answer]) => [id, { ...answer, finalDrawingPng: renderDrawing(answer.strokes, "export") }]))
+        ? Object.fromEntries(Object.entries(current.answers).map(([id, answer]) => [id, { ...answer, finalDrawingPng: isRealCase ? null : renderDrawing(answer.strokes, "export") }]))
         : current.answers;
       const resetToFirstTarget = stage === 2 || stage === 3;
       const firstTarget = studyCase.targets[0];
@@ -1778,8 +1841,11 @@ export function StudyApp({
       try {
         if (!isPractice && !localFirst) window.localStorage.setItem(DRAFT_KEY, JSON.stringify(completedDraft));
         await onTaskComplete(completedDraft);
-      } catch {
-        setSaveState(localFirst ? "本机提交保存失败，请勿关闭页面，请重试或联系研究者" : "提交失败，记录仍保存在本机，请检查网络后重试");
+      } catch (error) {
+        const message = (error as Error).message || "提交失败";
+        setSaveState(message === "网络暂时不可用" || message === "实验服务暂时无法连接"
+          ? "当前无法连接服务器。记录已安全保存在本机，请保持页面打开并恢复网络后重试。"
+          : `${message}。记录已安全保存在本机，请保持页面打开并重试。`);
       } finally {
         setSubmissionBusy(false);
       }
@@ -1878,9 +1944,9 @@ export function StudyApp({
     const mixedDrawingCopy = Boolean(mixedDrawingModes);
     const content: Record<number, Transition> = {
       2: { target: 2, title: "整体观察已完成", body: `接下来将逐一判断 ${studyCase.targets.length} 个目标字符。整幅碑刻${isAi ? "和 AI 提示" : ""}仍会保留；提交判断后将不能修改。`, confirm: "进入字符判断" },
-      3: { target: 3, title: "字符判断已完成", body: mixedDrawingCopy ? "接下来请分别按页面标注绘制两个字符的 skeleton 或 outline；切换字符时画笔粗细会自动调整。" : `接下来请根据残存证据和已确认字符，逐字绘制 ${drawingName}。原图、字符判断${isAi ? "和 AI 提示" : ""}仍会显示。`, confirm: mixedDrawingCopy ? "进入绘制修复" : `进入${drawingNameZh}绘制` },
-      4: { target: 4, title: mixedDrawingCopy ? "绘制修复已完成" : `${drawingNameZh}绘制已完成`, body: mixedDrawingCopy ? "接下来将集中检查两个字符的判断和绘制结果。当前检查页只供核对，不支持返回修改。" : `接下来将集中检查所有字符判断和 ${drawingName}。当前检查页只供核对，不支持返回修改。`, confirm: "进入检查" },
-      5: { target: 5, title: "确认提交修复结果", body: mixedDrawingCopy ? "所有字符判断、outline 与 skeleton 将被锁定并保存。提交后只需完成一份简短问卷。" : `所有字符判断与 ${drawingName} 将被锁定并保存。提交后只需完成一份简短问卷。`, confirm: "确认并提交" },
+      3: { target: 3, title: isRealCase ? "整体观察已完成" : "字符判断已完成", body: mixedDrawingCopy ? "接下来请分别按页面标注绘制两个字符的字符骨架（Skeleton）或外轮廓（Outline）；切换字符时画笔粗细会自动调整。" : `接下来请根据残存证据和${isRealCase ? "右侧显示的转录字符" : "已确认字符"}，逐字绘制 ${drawingLabel}。原图${showsTranscription ? "和转录文本" : "、字符判断"}仍会显示。`, confirm: mixedDrawingCopy ? "进入绘制修复" : `进入${drawingNameZh}绘制` },
+      4: { target: 4, title: mixedDrawingCopy ? "绘制修复已完成" : `${drawingNameZh}绘制已完成`, body: mixedDrawingCopy ? "接下来将集中检查两个字符的判断和绘制结果。当前检查页只供核对，不支持返回修改。" : `接下来将集中检查所有字符判断和 ${drawingLabel}。当前检查页只供核对，不支持返回修改。`, confirm: "进入检查" },
+      5: { target: 5, title: "确认提交修复结果", body: mixedDrawingCopy ? "所有字符判断、外轮廓（Outline）与字符骨架（Skeleton）将被锁定并保存。提交后只需完成一份简短问卷。" : `所有字符判断与 ${drawingLabel} 将被锁定并保存。提交后只需完成一份简短问卷。`, confirm: "确认并提交" },
     };
     setTransition(content[target]);
   };
@@ -1925,16 +1991,18 @@ export function StudyApp({
   );
   const formalQuestionComplete = inputReportComplete && studyCase.targets.every((target) => {
     const answer = draft.answers[target.id];
-    return answer.characterConfidence && answer.drawingConfidence;
+    return isRealCase ? answer.drawingConfidence && answer.characterDifficulty : answer.characterConfidence && answer.drawingConfidence;
   }) && draft.difficulty && (!isAi || draft.aiHelpfulness);
   const questionComplete = isPractice ? Boolean(draft.difficulty) : Boolean(formalQuestionComplete);
   const missingCharacterConfidence = studyCase.targets.filter((target) => !draft.answers[target.id].characterConfidence).length;
   const missingDrawingConfidence = studyCase.targets.filter((target) => !draft.answers[target.id].drawingConfidence).length;
+  const missingCharacterDifficulty = studyCase.targets.filter((target) => !draft.answers[target.id].characterDifficulty).length;
   const questionnaireMissing = isPractice ? [!draft.difficulty ? "练习确认" : ""].filter(Boolean) : [
     !draft.inputReport.device || (draft.inputReport.device === "other" && !draft.inputReport.deviceOther.trim()) ? "作答设备" : "",
     !draft.inputReport.inputMethod || (draft.inputReport.inputMethod === "other" && !draft.inputReport.inputMethodOther.trim()) ? "绘制输入方式" : "",
-    missingCharacterConfidence ? `${missingCharacterConfidence} 个字符判断信心` : "",
-    missingDrawingConfidence ? `${missingDrawingConfidence} 个 ${drawingName} 信心` : "",
+    !isRealCase && missingCharacterConfidence ? `${missingCharacterConfidence} 个字符判断信心` : "",
+    missingDrawingConfidence ? `${missingDrawingConfidence} 个 ${drawingLabel} 信心` : "",
+    isRealCase && missingCharacterDifficulty ? `${missingCharacterDifficulty} 个字符修复难度` : "",
     !draft.difficulty ? "整体任务难度" : "",
     isAi && !draft.aiHelpfulness ? "AI 帮助程度" : "",
   ].filter(Boolean);
@@ -1948,47 +2016,54 @@ export function StudyApp({
           {debugMode && <span className="debug-mode-badge"><Bug size={14} aria-hidden="true" />Debug mode</span>}
           {debugMode && draft.stage > 1 && <button type="button" className="debug-back-button" onClick={() => returnToDebugStage((draft.stage - 1) as Stage)}><ArrowLeft size={15} aria-hidden="true" />返回上一步</button>}
           <div className="save-state"><span />{onlineSaveState ?? saveState}</div>
+          {!isPractice && onlineTask && onFeedback && onReturnDashboard && <div className="home-participant study-participant"><span>参与者</span><strong><span>{onlineTask.config.participantId}</span>{onlineTask.participantEmail && <span className="participant-email">{onlineTask.participantEmail}</span>}</strong><button className="feedback-trigger" type="button" onClick={() => setFeedbackOpen(true)} aria-haspopup="dialog" aria-label="提交反馈"><MessageCircle size={15} /><span>反馈</span></button><button className="logout-trigger" type="button" onClick={() => void returnToDashboard()} disabled={returningToDashboard} aria-label="暂停任务并返回 Dashboard" title="返回 Dashboard"><Home size={15} /></button></div>}
         </div>
       </header>
+      {feedbackOpen && onFeedback && <FeedbackDialog onClose={() => setFeedbackOpen(false)} onSubmit={onFeedback} />}
 
       {draft.stage <= 5 && (
         <nav className="stepper" aria-label="任务进度" data-practice-guide={isPractice ? "roadmap" : undefined}>
           {steps.map((step, index) => {
-            const roadmapStage = (index + 1) as Stage;
+            const roadmapStage = step.stage as Stage;
             const className = `step ${visibleStage === roadmapStage ? "is-current" : ""} ${visibleStage > roadmapStage ? "is-done" : ""}`;
-            const content = <><span className="step-number">{visibleStage > roadmapStage ? "✓" : String(roadmapStage).padStart(2, "0")}</span><span>{step}</span></>;
+            const content = <><span className="step-number">{visibleStage > roadmapStage ? "✓" : String(index + 1).padStart(2, "0")}</span><span>{step.label}</span></>;
             return debugMode
-              ? <button type="button" className={className} key={step} aria-current={visibleStage === roadmapStage ? "step" : undefined} onClick={() => navigateDebugStage(roadmapStage)}>{content}</button>
-              : <div className={className} key={step}>{content}</div>;
+              ? <button type="button" className={className} key={step.label} aria-current={visibleStage === roadmapStage ? "step" : undefined} onClick={() => navigateDebugStage(roadmapStage)}>{content}</button>
+              : <div className={className} key={step.label}>{content}</div>;
           })}
         </nav>
       )}
 
       {draft.stage === 1 && (
         <>
-          <StageHeader stage={1} title="先观察整体，再作出判断" description="请仔细查看碑刻的整体布局、残存笔画和目标字符之间的位置关系。当您心中形成初步判断后，再进入下一步。" />
-          <section className={`observation-layout ${isAi ? "has-ai" : ""}`} data-practice-guide={isPractice ? "stage1-viewer" : undefined}>
+          <StageHeader stage={1} title={isRealCase ? "观察整体与目标字符" : "先观察整体，再作出判断"} description={isRealCase ? "请仔细查看碑刻的整体布局、残存笔画和目标字符之间的位置关系；右侧已显示每个目标字符的确定转录。" : "请仔细查看碑刻的整体布局、残存笔画和目标字符之间的位置关系。当您心中形成初步判断后，再进入下一步。"} />
+          <section className={`observation-layout ${showsTranscription ? "has-ai" : ""}`} data-practice-guide={isPractice ? "stage1-viewer" : undefined}>
             <section className="viewer-card observation-viewer-card">
               <OriginalRubbingHeading />
-              {!isAi && <ObservationDamageStrip studyCase={studyCase} activeId={activeTarget.id} onSelect={selectObservationTarget} showDamageSummary={!isPractice} />}
-              <SourceViewer studyCase={studyCase} activeId={observationTargetId ?? (isAi ? "" : activeTarget.id)} activePageId={activePage.id} onPageChange={selectPage} onSelect={selectObservationTarget} answers={draft.answers} initialView="global" defaultPageDrawerOpen focusActiveTarget={Boolean(observationTargetId)} focusRequestKey={focusRequestKey} viewportStateCache={viewportStateCache} onInteraction={(type) => recordEvent(type, observationTargetId ?? (isAi ? undefined : activeTarget.id), `page:${activePage.id}`)} />
+              {!showsTranscription && <ObservationDamageStrip studyCase={studyCase} activeId={activeTarget.id} onSelect={selectObservationTarget} showDamageSummary={!isPractice} />}
+              <SourceViewer studyCase={studyCase} activeId={observationTargetId ?? (showsTranscription ? "" : activeTarget.id)} activePageId={activePage.id} onPageChange={selectPage} onSelect={selectObservationTarget} answers={draft.answers} initialView="global" defaultPageDrawerOpen focusActiveTarget={Boolean(observationTargetId)} focusRequestKey={focusRequestKey} viewportStateCache={viewportStateCache} onInteraction={(type) => recordEvent(type, observationTargetId ?? (showsTranscription ? undefined : activeTarget.id), `page:${activePage.id}`)} />
             </section>
-            {isAi && <ObservationAiPanel studyCase={studyCase} pageId={activePage.id} activeId={observationTargetId} onSelect={selectObservationTarget} />}
+            {showsTranscription && <ObservationAiPanel studyCase={studyCase} pageId={activePage.id} activeId={observationTargetId} onSelect={selectObservationTarget} fixed={isRealCase} />}
           </section>
-          <section className="stage-action"><div><span className="action-kicker">准备好了吗？</span><p>进入下一阶段后，您将逐一判断目标字符，且不能返回本页。</p></div><div className="stage-action-buttons"><PauseTaskButton onClick={pauseTask} /><button className="primary-button" onClick={() => openTransition(2)}>我已完成观察<span>→</span></button></div></section>
+          <section className="stage-action"><div><span className="action-kicker">准备好了吗？</span><p>{isRealCase ? "进入下一阶段后，您将开始绘制目标字符，且不能返回本页。" : "进入下一阶段后，您将逐一判断目标字符，且不能返回本页。"}</p></div><div className="stage-action-buttons"><PauseTaskButton onClick={pauseTask} /><button className="primary-button" onClick={() => openTransition(isRealCase ? 3 : 2)}>我已完成观察<span>→</span></button></div></section>
         </>
       )}
 
       {draft.stage === 2 && (
         <>
-          <StageHeader stage={2} title="为每个目标字符作出明确判断" description="一次集中处理一个字符。您可以自由切换顺序，已填写的内容会自动保留。" />
+          <StageHeader stage={2} title={isRealCase ? "确认每个目标字符的身份" : "为每个目标字符作出明确判断"} description={isRealCase ? "逐一查看残损字符及其确定的转录文本。本阶段不需要输入或修改字符。" : "一次集中处理一个字符。您可以自由切换顺序，已填写的内容会自动保留。"} />
           <section className="work-grid judgment-grid">
             <div className="viewer-card work-viewer"><OriginalRubbingHeading /><SourceViewer studyCase={studyCase} activeId={activeTarget.id} activePageId={activePage.id} onPageChange={selectPage} onSelect={selectCharacter} answers={draft.answers} compact focusActiveTarget focusRequestKey={focusRequestKey} viewportStateCache={viewportStateCache} onInteraction={(type) => recordEvent(type, activeTarget.id, `page:${activePage.id}`)} /></div>
             <aside className="task-panel judgment-panel" data-practice-guide={isPractice ? "stage2-input" : undefined}>
-              <ParallelPanelHeading title="字符判断" />
+              <ParallelPanelHeading title={isRealCase ? "字符身份确认" : "字符判断"} />
               <div className="parallel-panel-body judgment-panel-body">
                 <div className="panel-character-nav"><CharacterNav studyCase={studyCase} activeId={activeTarget.id} answers={draft.answers} mode="hypothesis" onSelect={selectCharacter} /></div>
-                {isAi ? (
+                {isRealCase ? (
+                  <section className="no-llm-judgment-card" aria-label={`${activeTarget.label}字符身份`}>
+                    <img src={activeTarget.glyphUrl} alt={`${activeTarget.label}残损局部图`} />
+                    <div className="no-llm-judgment-input"><span>确定转录</span><strong className="drawing-character-token">{activeTarget.transcription}</strong></div>
+                  </section>
+                ) : isAi ? (
                   <div className="hypothesis-form">
                     <div className="judgment-evidence-item">
                       <JudgmentEvidenceCard
@@ -2005,7 +2080,7 @@ export function StudyApp({
                           recordEvent("custom_hypothesis_edited", activeTarget.id);
                         }}
                       />
-                      {activeAnswer.hypothesis && <div className="confirmed-answer"><span>当前判断</span><strong>{activeAnswer.hypothesis}</strong><small>{activeAnswer.selectionSource === "ranked" ? `AI 建议` : "自行输入"}</small></div>}
+                      {activeAnswer.hypothesis && <div className="confirmed-answer"><span>当前判断</span><strong>{answerDisplayText(activeTarget, activeAnswer)}</strong><small>{activeAnswer.selectionSource === "ranked" ? `AI 建议` : "自行输入"}</small></div>}
                     </div>
                   </div>
                 ) : (
@@ -2017,13 +2092,13 @@ export function StudyApp({
                         <IdsCharacterInput key={activeTarget.id} value={activeAnswer.hypothesis} placeholder="请输入您判断的字符" ariaLabel={`${activeTarget.label}的字符判断`} onChange={(value) => { updateAnswer(activeTarget.id, { hypothesis: value, selectionSource: "custom", candidateRank: null, rejectedAll: false }); recordEvent("custom_hypothesis_edited", activeTarget.id); }} />
                       </div>
                     </section>
-                    {activeAnswer.hypothesis && <div className="confirmed-answer"><span>当前判断</span><strong>{activeAnswer.hypothesis}</strong><small>自行输入</small></div>}
+                    {activeAnswer.hypothesis && <div className="confirmed-answer"><span>当前判断</span><strong>{answerDisplayText(activeTarget, activeAnswer)}</strong><small>自行输入</small></div>}
                   </>
                 )}
               </div>
             </aside>
           </section>
-          <section className="stage-action"><div><span className="action-kicker">已完成 {completedHypotheses} / {studyCase.targets.length}</span><p>所有字符都需要明确的 character hypothesis。</p></div><div className="stage-action-buttons"><PauseTaskButton onClick={pauseTask} /><StageAdvanceButton label="完成字符判断" disabledReason={missingHypotheses.length ? `请先完成 ${missingHypotheses.join("、")} 的字符判断。` : null} onClick={() => openTransition(3)} /></div></section>
+          <section className="stage-action"><div><span className="action-kicker">已确认 {completedHypotheses} / {studyCase.targets.length}</span><p>{isRealCase ? "目标字符及其转录已经固定，无需输入。" : "所有字符都需要明确的 character hypothesis。"}</p></div><div className="stage-action-buttons"><PauseTaskButton onClick={pauseTask} /><StageAdvanceButton label={isRealCase ? "完成字符身份确认" : "完成字符判断"} disabledReason={missingHypotheses.length ? `请先完成 ${missingHypotheses.join("、")} 的字符判断。` : null} onClick={() => openTransition(3)} /></div></section>
         </>
       )}
 
@@ -2031,7 +2106,7 @@ export function StudyApp({
         <>
           <StageHeader
             stage={3}
-            stageName={isOutline ? "轮廓绘制" : "骨架绘制"}
+            stageName={isOutline ? "外轮廓（Outline）绘制" : "字符骨架（Skeleton）绘制"}
             title={isOutline ? "绘制修复字符的完整边界" : "绘制字符的主要结构骨架"}
             description={isOutline ? "Outline 用来表达修复后字符笔画的完整外边界。请沿您判断的字形边缘绘制，不要只画中心线。" : "Skeleton 用来表达字符的主要中心线和整体结构，不需要模仿碑刻笔画的真实粗细。"}
           />
@@ -2041,7 +2116,7 @@ export function StudyApp({
               <ParallelPanelHeading title={`${drawingNameZh}绘制`} />
               <div className="parallel-panel-body drawing-panel-body">
                 <div className="panel-character-nav"><CharacterNav studyCase={studyCase} activeId={activeTarget.id} answers={draft.answers} mode="drawing" onSelect={selectCharacter} /></div>
-                <div className="drawing-title"><h2>绘制 <span className={`drawing-character-token ${isIdsExpression(activeAnswer.hypothesis) ? "is-ids" : ""}`}>{activeAnswer.hypothesis}</span> 的 {drawingName}</h2></div>
+                <div className="drawing-title"><h2>绘制 <span className={`drawing-character-token ${isIdsExpression(activeAnswer.hypothesis) ? "is-ids" : ""} ${displayFormClass(answerDisplayText(activeTarget, activeAnswer))}`}>{answerDisplayText(activeTarget, activeAnswer)}</span> 的 <strong className="red-bold">{isOutline ? "外轮廓（Outline）" : "字符骨架（Skeleton）"}</strong></h2></div>
                 <DrawingCanvas
                   key={`${activeTarget.id}-${setting.drawingMode}`}
                   target={activeTarget}
@@ -2064,7 +2139,7 @@ export function StudyApp({
 
       {draft.stage === 4 && (
         <>
-          <StageHeader stage={4} title="提交前，集中检查全部结果" description={mixedDrawingModes ? "请分别核对每个字符的最终判断、outline 或 skeleton。本页暂不支持修改；确认提交后，修复结果将被锁定。" : `请核对每个字符的最终判断和 ${drawingName}。本页暂不支持修改；确认提交后，修复结果将被锁定。`} />
+          <StageHeader stage={4} title="提交前，集中检查全部结果" description={mixedDrawingModes ? "请分别核对每个字符的最终判断、字符骨架（Skeleton）或外轮廓（Outline）。本页暂不支持修改；确认提交后，修复结果将被锁定。" : `请核对每个字符的最终判断和 ${drawingLabel}。本页暂不支持修改；确认提交后，修复结果将被锁定。`} />
           <section className="review-grid">
             <div className="viewer-card review-source"><OriginalRubbingHeading /><SourceViewer studyCase={studyCase} activeId={reviewTargetId ?? activeTarget.id} activePageId={activePage.id} onPageChange={selectPage} onSelect={selectReviewTarget} answers={draft.answers} showDrawings initialView="global" focusActiveTarget={Boolean(reviewTargetId)} focusRequestKey={focusRequestKey} viewportStateCache={viewportStateCache} /></div>
             <aside className="review-panel" data-practice-guide={isPractice ? "stage4-review" : undefined}>
@@ -2097,9 +2172,9 @@ export function StudyApp({
                           </div>
                         </div>
                         <div className="review-copy">
-                          <strong>{answer.hypothesis}</strong>
+                          <strong>{answerDisplayText(target, answer)}</strong>
                           <span className="stroke-count">
-                            {answer.selectionSource === "ranked" ? `AI 建议` : "自行输入"}
+                            {answer.selectionSource === "fixed" ? "确定转录" : answer.selectionSource === "ranked" ? `AI 建议` : "自行输入"}
                             {` · ${countBrushStrokes(answer.strokes)}条笔画`}
                           </span>
                         </div>
@@ -2111,7 +2186,7 @@ export function StudyApp({
               </div>
             </aside>
           </section>
-          <section className="stage-action submit-action"><div><span className="action-kicker">结果核对完成</span><p>{onlineTask?.skipQuestionnaire ? "提交后两个字符的绘制结果将保存为新手引导素材，不需要填写问卷。" : isPractice && mixedDrawingModes ? "提交后字符判断、outline 和 skeleton 将被锁定，随后完成一题引导确认。" : isPractice ? `提交后字符判断和 ${drawingName} 将被锁定，随后完成一题引导确认。` : `提交后字符判断和 ${drawingName} 将被锁定。如有需要补充说明的内容，可在下一页问卷中填写备注。`}</p></div><div className="stage-action-buttons"><PauseTaskButton onClick={pauseTask} /><button className="primary-button" disabled={submissionBusy} onClick={() => onlineTask?.skipQuestionnaire ? void completeWithoutQuestionnaire() : openTransition(5)}>{submissionBusy ? "正在保存…" : onlineTask?.skipQuestionnaire ? "保存素材绘制" : "确认并提交修复"}<span>→</span></button></div></section>
+          <section className="stage-action submit-action"><div><span className="action-kicker">结果核对完成</span><p>{onlineTask?.skipQuestionnaire ? "提交后两个字符的绘制结果将保存为新手引导素材，不需要填写问卷。" : isPractice && mixedDrawingModes ? "提交后字符判断、外轮廓（Outline）和字符骨架（Skeleton）将被锁定，随后完成一题引导确认。" : isPractice ? `提交后字符判断和 ${drawingLabel} 将被锁定，随后完成一题引导确认。` : `提交后字符判断和 ${drawingLabel} 将被锁定。如有需要补充说明的内容，可在下一页问卷中填写备注。`}</p></div><div className="stage-action-buttons"><PauseTaskButton onClick={pauseTask} /><button className="primary-button" disabled={submissionBusy} onClick={() => onlineTask?.skipQuestionnaire ? void completeWithoutQuestionnaire() : openTransition(5)}>{submissionBusy ? "正在保存…" : onlineTask?.skipQuestionnaire ? "保存素材绘制" : "确认并提交修复"}<span>→</span></button></div></section>
         </>
       )}
 
@@ -2190,18 +2265,22 @@ export function StudyApp({
                   <div className="questionnaire-section-heading character-question-heading">
                     <div className="question-target">
                       <div className="question-glyph"><img src={target.glyphUrl} alt="" /><DrawingOverlay strokes={answer.strokes} /></div>
-                      <div><span className="small-label">{target.label}</span><strong>{answer.hypothesis}</strong></div>
+                      <div><span className="small-label">{target.label}</span><strong>{answerDisplayText(target, answer)}</strong></div>
                     </div>
                   </div>
                   <div className="question-card">
-                    <div className="question-row">
+                    {!isRealCase && <div className="question-row">
                       <h3>您对字符判断有多少信心？</h3>
                       <Rating label={`${target.label}字符判断信心`} lowLabel="非常没有信心" highLabel="非常有信心" value={answer.characterConfidence} onChange={(value) => updateAnswer(target.id, { characterConfidence: value })} />
-                    </div>
+                    </div>}
                     <div className="question-row">
-                      <h3>{isOutline ? "您对所绘 outline 的边界准确性有多少信心？" : "您对所绘 skeleton 的结构有多少信心？"}</h3>
+                      <h3 className="drawing-mode-emphasis">{isOutline ? "您对所绘外轮廓（Outline）的边界准确性有多少信心？" : "您对所绘字符骨架（Skeleton）的结构有多少信心？"}</h3>
                       <Rating label={`${target.label}${drawingNameZh}信心`} lowLabel="非常没有信心" highLabel="非常有信心" value={answer.drawingConfidence} onChange={(value) => updateAnswer(target.id, { drawingConfidence: value })} />
                     </div>
+                    {isRealCase && <div className="question-row">
+                      <h3>您认为该字符的修复难度如何？</h3>
+                      <Rating label={`${target.label}修复难度`} lowLabel="非常容易" highLabel="非常困难" value={answer.characterDifficulty} onChange={(value) => updateAnswer(target.id, { characterDifficulty: value })} />
+                    </div>}
                   </div>
                 </article>
               );
@@ -2232,7 +2311,7 @@ export function StudyApp({
             </article>
             </>}
           </section>
-          <section className="stage-action"><div><span className="action-kicker">问卷完成状态</span><p>{questionComplete ? "所有必填项已完成。" : "请回答所有必填问题后提交。"}</p></div><div className="stage-action-buttons"><PauseTaskButton onClick={pauseTask} /><StageAdvanceButton label={submissionBusy ? "正在提交…" : isPractice ? "完成新手引导" : draft.config.taskOrder < 3 ? "提交问卷并完成本项任务" : "提交问卷并完成全部任务"} disabledReason={submissionBusy ? "正在等待服务器确认。" : questionnaireMissing.length ? `请先完成：${questionnaireMissing.join("、")}。` : null} onClick={() => void submitQuestionnaire()} /></div></section>
+          <section className="stage-action"><div><span className="action-kicker">问卷完成状态</span><p>{questionComplete ? "所有必填项已完成。" : "请回答所有必填问题后提交。"}</p></div><div className="stage-action-buttons"><PauseTaskButton onClick={pauseTask} /><StageAdvanceButton label={submissionBusy ? "正在提交…" : isPractice ? "完成新手引导" : isRealCase || draft.config.taskOrder >= 3 ? "提交问卷并完成全部任务" : "提交问卷并完成本项任务"} disabledReason={submissionBusy ? "正在等待服务器确认。" : questionnaireMissing.length ? `请先完成：${questionnaireMissing.join("、")}。` : null} onClick={() => void submitQuestionnaire()} /></div></section>
         </>
       )}
 
@@ -2244,7 +2323,7 @@ export function StudyApp({
         <div className="pause-overlay" role="dialog" aria-modal="true" aria-labelledby="pause-title" onKeyDown={(event) => { if (event.key === "Tab") event.preventDefault(); }}><div className="pause-dialog"><Pause size={34} aria-hidden="true" /><p className="section-index">TASK PAUSED</p><h2 id="pause-title">任务已暂停</h2><p>当前页面已锁定，暂停时间不会计入任务耗时。</p><button className="pause-resume-button" onClick={resumeTask} autoFocus><Play size={17} aria-hidden="true" />继续任务</button></div></div>
       )}
 
-      {taskIntroOpen && <TaskIntroModal taskOrder={draft.config.taskOrder} drawingName={isOutline ? "outline" : "skeleton"} assisted={isAi} mixed={Boolean(mixedDrawingModes)} busy={taskStartBusy} onStart={startTask} />}
+      {taskIntroOpen && <TaskIntroModal taskOrder={draft.config.taskOrder} drawingName={isOutline ? "outline" : "skeleton"} assisted={isAi} fixed={isRealCase} mixed={Boolean(mixedDrawingModes)} busy={taskStartBusy} onStart={startTask} />}
       {transition && <TransitionModal transition={transition} onCancel={() => setTransition(null)} onConfirm={() => enterStage(transition.target)} />}
       <PracticeGuide
         key={`${draft.stage}-${practiceDrawingPhase}`}

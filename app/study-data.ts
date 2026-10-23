@@ -1,6 +1,6 @@
-export type StudyCondition = "skeleton_no_llm" | "skeleton_llm_assisted" | "outline_no_llm";
+export type StudyCondition = "skeleton_no_llm" | "skeleton_llm_assisted" | "outline_no_llm" | "real_case_fixed_transcription";
 export type DrawingMode = "skeleton" | "outline";
-export type AssistanceMode = "none" | "llm";
+export type AssistanceMode = "none" | "llm" | "fixed";
 
 export type StudyConditionDefinition = {
   id: StudyCondition;
@@ -13,6 +13,7 @@ export type StudyConditionDefinition = {
 export type Candidate = {
   rank: number;
   character: string;
+  displayCharacter: string;
   confidence: number;
 };
 
@@ -41,10 +42,10 @@ export type TargetCharacter = {
   crop: { x: number; y: number; size: number };
   glyphUrl: string;
   maskUrl: string;
-  maskLevel: 3 | 5 | 7 | 10 | 20;
+  maskLevel: 0 | 3 | 5 | 7 | 10 | 20;
   maskComponents: Array<{ templateFile: string; rotationDegrees: 0 | 90 | 180 | 270 }>;
   damageTier: 1 | 2 | 3 | null;
-  damageSeverity: "Mild" | "Medium" | "Severe" | "Legacy test";
+  damageSeverity: "Mild" | "Medium" | "Severe" | "Legacy test" | "Natural";
   maskRatio: number;
   candidates: Candidate[];
 };
@@ -113,24 +114,31 @@ export const getStudyPage = (studyCase: StudyCase, pageId: number) =>
 export const STUDY_CONDITIONS: StudyConditionDefinition[] = [
   {
     id: "skeleton_no_llm",
-    label: "Skeleton · No LLM",
+    label: "字符骨架（Skeleton） · 无文本预测模型辅助（No LLM）",
     description: "不显示转录和候选字，绘制字符结构骨架",
     drawingMode: "skeleton",
     assistanceMode: "none",
   },
   {
     id: "skeleton_llm_assisted",
-    label: "Skeleton · LLM-assisted",
+    label: "字符骨架（Skeleton） · 古文文本预测模型辅助（LLM-assisted）",
     description: "显示 AI 转录和候选字，绘制字符结构骨架",
     drawingMode: "skeleton",
     assistanceMode: "llm",
   },
   {
     id: "outline_no_llm",
-    label: "Outline · No LLM",
+    label: "外轮廓（Outline） · 无文本预测模型辅助（No LLM）",
     description: "不显示转录和候选字，绘制修复字符完整边界",
     drawingMode: "outline",
     assistanceMode: "none",
+  },
+  {
+    id: "real_case_fixed_transcription",
+    label: "真实案例 · 固定转录 · 字符骨架（Skeleton）",
+    description: "显示已确定的转录字符，绘制真实残损字符的结构骨架",
+    drawingMode: "skeleton",
+    assistanceMode: "fixed",
   },
 ];
 

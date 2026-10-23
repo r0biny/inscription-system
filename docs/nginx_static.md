@@ -122,13 +122,13 @@ curl -fsS --connect-timeout 8 --max-time 35 https://www.musicxlab.com/inscriptio
 
 ## 5. 转发行为、内存上限与兼容范围
 
-- 只转发当前实验的登录 Cookie，名称与 Path 按部署子目录隔离；保留过期、HttpOnly、Secure、SameSite 属性并移除 Domain。
+- 只将当前实验的旧版兼容 Cookie、三个档案 session Cookie 和 active-archive Cookie 发往 Worker；响应 Cookie 改为 lab 专属名称，并把 Path 限定在部署子目录。Worker 当前不设置 Domain，其他过期、HttpOnly、Secure、SameSite 属性保持不变。
 - 检查浏览器 Origin，再转换为 Worker Origin；其他站点的 Cookie / Authorization 不向 Worker 传递。
 - 保留请求正文、查询字符串和上游错误；关闭 API 缓存及 POST 自动重放。
 - API 全站同时最多处理 8 个请求，超过返回 429。项目的离线同步会退避重试 429；普通交互请求可能需要参与者稍后重试。该限制是并行请求数，不是参与者总人数。
 - 单请求最大 1,850,000 字节，与 Worker 一致；正文使用内存缓冲，测试确认未写入临时正文文件。8 个最大正文合计约 14.1 MiB，另有连接及 TLS 等开销。API 访问日志关闭，响应不落入临时文件。
 - 带版本号的实验图片与构建脚本使用长期浏览器缓存；入口、Service Worker 等使用 `no-cache`，API 使用 `no-store`。
-- 此适配针对当前 Worker 的单个 `paper1_session` Cookie 约定。若将来修改认证、发送多个 Set-Cookie 或更改 Cookie 名称，必须重新验证适配行为。
+- 此适配针对当前 Worker 的 `paper1_session`、`paper1_session_archive_1–3` 和 `paper1_active_archive` 约定。若将来增加档案、修改认证或更改 Cookie 名称，必须重新生成配置并验证适配行为。
 - 当前 API 不依赖重定向。配置只接受上游同源绝对 URL 或站内根路径重定向；其他重定向返回 502。Nginx 的 30 秒读写等待超时与 Node 的整次请求计时略有不同。
 - 只提供既定静态文件类型，不公开 `build_info.json`、配置 JSON 或隐藏文件。实验 Service Worker、缓存与草稿继续限定在子目录。
 

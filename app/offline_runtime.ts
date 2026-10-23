@@ -18,15 +18,26 @@ export class OfflineSync {
   store: OfflineStore;
   notify: (error?: string) => void;
   timer: ReturnType<typeof setTimeout> | null = null;
+  runPromise: Promise<void> | null = null;
   running = false; stopped = false; blocked = false; attempt = 0;
   constructor(store: OfflineStore, notify: (error?: string) => void) { this.store = store; this.notify = notify; }
   schedule(delay = 0, reconnect = false) {
     if (this.stopped || this.blocked || this.running) return;
     if (this.timer && this.attempt > 0 && !reconnect) return;
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => { this.timer = null; void this.run(); }, delay);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.runPromise = this.run().finally(() => { this.runPromise = null; });
+      void this.runPromise;
+    }, delay);
   }
-  async run() {
+  async flush() {
+    if (this.stopped) throw new RequestError("同步服务已停止", 0);
+    if (this.runPromise) await this.runPromise;
+    if (this.blocked) throw new RequestError("待同步记录无效", 400);
+    if (pending(this.store.state)) await this.run(true);
+  }
+  async run(foreground = false) {
     if (this.running || this.stopped || this.blocked) return;
     this.running = true;
     let retry = false;
@@ -42,6 +53,10 @@ export class OfflineSync {
       }
     } catch (error) {
       if (this.stopped) return;
+      if (foreground) {
+        if (!(error instanceof RequestError && (error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500))) this.blocked = true;
+        throw error;
+      }
       if (error instanceof RequestError && (error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500)) retry = true;
       else { this.blocked = true; this.notify((error as Error).message + "。本机记录保留，请勿清除浏览器数据。"); }
     } finally {
@@ -61,7 +76,7 @@ export async function prepareOfflineAssets(state: OfflineState) {
   await navigator.serviceWorker.ready;
   await import("openseadragon");
   if (document.readyState !== "complete") await new Promise<void>(resolve => window.addEventListener("load", () => resolve(), { once: true }));
-  const cache = await caches.open(labStorageKey("offline-static-v1"));
+  const cache = await caches.open(labStorageKey("offline-static-v2"));
   const urls = new Set<string>([labUrl("/")]);
   const walk = (value: any) => {
     if (!value || typeof value !== "object") return;

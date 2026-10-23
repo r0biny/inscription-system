@@ -7,7 +7,13 @@ import { fileURLToPath } from "node:url";
 import { readConfig } from "./lab_config.mjs";
 
 const MAX_REQUEST_BYTES = 1_850_000; // Same limit as the existing Worker.
-const UPSTREAM_COOKIE = "paper1_session";
+const UPSTREAM_COOKIES = [
+  "paper1_session",
+  "paper1_session_archive_1",
+  "paper1_session_archive_2",
+  "paper1_session_archive_3",
+  "paper1_active_archive",
+];
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2" };
 
 function json(res, status, message) {
@@ -15,14 +21,32 @@ function json(res, status, message) {
   res.end(JSON.stringify({ ok: false, message }));
 }
 
+function browserCookieName(upstreamName, config) {
+  if (upstreamName === "paper1_session") return config.cookieName;
+  if (upstreamName === "paper1_active_archive") return config.cookieName + "_active_archive";
+  const archive = upstreamName.match(/^paper1_session_archive_([1-3])$/);
+  return archive ? config.cookieName + "_archive_" + archive[1] : null;
+}
+
 export function upstreamCookie(header, config) {
-  const cookie = (header || "").split(";").map((v) => v.trim()).find((v) => v.startsWith(config.cookieName + "="));
-  return cookie ? UPSTREAM_COOKIE + cookie.slice(config.cookieName.length) : "";
+  const browserCookies = new Map((header || "").split(";").map((value) => value.trim()).filter(Boolean).map((value) => {
+    const separator = value.indexOf("=");
+    return separator < 0 ? [value, ""] : [value.slice(0, separator), value.slice(separator + 1)];
+  }));
+  return UPSTREAM_COOKIES.flatMap((upstreamName) => {
+    const localName = browserCookieName(upstreamName, config);
+    const value = localName ? browserCookies.get(localName) : undefined;
+    return value === undefined ? [] : [`${upstreamName}=${value}`];
+  }).join("; ");
 }
 
 export function browserCookie(cookie, config) {
-  if (!cookie.startsWith(UPSTREAM_COOKIE + "=")) return null;
-  return (config.cookieName + cookie.slice(UPSTREAM_COOKIE.length))
+  const separator = cookie.indexOf("=");
+  if (separator < 1) return null;
+  const upstreamName = cookie.slice(0, separator);
+  const localName = browserCookieName(upstreamName, config);
+  if (!localName) return null;
+  return (localName + cookie.slice(separator))
     .replace(/;\s*Domain=[^;]*/gi, "")
     .replace(/;\s*Path=[^;]*/gi, "; Path=" + config.basePath + "/");
 }

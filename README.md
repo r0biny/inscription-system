@@ -18,6 +18,10 @@ https://www.musicxlab.com/inscription-system/
 
 2026-09-14 更新：新手引导改为七条点击式流程介绍，采用完整的 outline / skeleton 示例；正式任务新增本机冻结提交、断网恢复和后台补传。配套 Cloudflare Worker 与 D1 增量迁移已由研究者部署。Music X Lab 管理人只需按下方「后续更新」拉取、测试、构建并重启本服务。功能和缓存注意事项见 [离线同步说明](docs/offline_sync.md)。
 
+2026-10-23 更新：同步 `app-online` 的多档案 Dashboard、档案二、真实案例、固定转录条件、档案切换与历史记录、任务内返回 Dashboard、完成前强制上传确认、本地数据导出、任务内反馈、参与者邮箱显示及简繁对照。公开静态材料由 3 个正式 case 扩展到 27 个，`public/study-data/` 约由 5.8 MB 增至 67 MB；仓库拉取、发布包和首次材料下载会相应增加，但浏览器仍只预下载当前参与者获分配的材料。完整简繁转换表使当前主 JS 构建产物约为 1.54 MB（gzip 约 623 KB）。
+
+本次更新不改变总体后端设计：Node 与纯 Nginx 两种部署仍只负责静态文件和 Worker API 转发，参与者、分配、问卷与笔画数据继续写入原 Cloudflare Worker/D1，lab 服务器不新增数据库或 Cloudflare 凭据。代理层已从单个 session Cookie 扩展为按档案隔离的 `archive_1–3` session 与 active-archive Cookie，并继续使用 lab 专属名称及 `/inscription-system/` Path，避免影响 Music X Lab 主站。部署前必须先确认共享 Worker 和 D1 migrations 已更新，再重新构建并替换前端及对应代理配置；不能只复制新的 `dist/` 而沿用旧代理配置。
+
 ## 分工与交付范围
 
 - **研究者**：维护独立 GitHub 公开仓库，确认访问地址，维护实验代码、材料、Cloudflare Worker 和 D1，并负责实验数据验收。
@@ -188,7 +192,7 @@ sudo systemctl status inscription-lab --no-pager
 
 ## 研究者：材料与实验数据管理
 
-`public/study-data/` 已包含目前三个正式 case 和新手引导所需的处理后图片，大图沿用 2048px 网页版。更换 case 时，研究者先用 `app-online` 的既有流程准备材料，再将参与者图片、引导 JSON 和完整示例笔画同步到本项目。
+`public/study-data/` 已包含 27 个正式 case：档案一 3 个、档案二 18 个、真实案例 6 个，以及新手引导所需的处理后图片，大图沿用 2048px 网页版。当前目录约 67 MB。更换 case 时，研究者先用 `app-online` 的既有流程准备材料，再将参与者图片、引导 JSON 和完整示例笔画同步到本项目。
 
 完整正式材料 JSON、GT 和数据库不放进 `public/`；不要将原始材料目录作为静态目录公开。本项目运行不依赖这些原始文件。
 
@@ -237,7 +241,7 @@ node scripts/browser_smoke.mjs
 - 浏览器只请求 Music X Lab 网站同域名下的 `/inscription-system/api/...`。
 - Node 去掉部署目录前缀，转发到现有 Worker 的 `/api/...`。
 - Node 先检查浏览器 Origin 是否属于配置中的 Music X Lab 网站来源，再转换为 Worker origin，满足现有 Worker 的同源检查；没有放宽 Worker 白名单或修改原 `app-online`。
-- 只转发本实验 Cookie，与 Music X Lab 网站其他 Cookie 区分名称，并将 Path 限定在实验子目录。
+- 只转发本实验的旧版兼容 Cookie、三个档案 session Cookie 和 active-archive Cookie；它们与 Music X Lab 网站其他 Cookie 区分名称，并将 Path 限定在实验子目录。
 - API 不缓存，保留 POST 正文、状态码、错误和清除 Cookie 的响应。
 - 构建资源和带版本号的图片使用长期浏览器缓存，替换图片时需同步新的版本 URL。
 - 上传上限与 Worker 相同，为 1,850,000 字节；Nginx 配置为 2m。

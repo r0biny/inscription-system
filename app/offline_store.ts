@@ -7,28 +7,62 @@ export type OfflineTask = {
 };
 export type OfflineState = { home: any; tasks: OfflineTask[]; activeTaskId: string | null; assetsReady: boolean };
 export type Persistence = { read(): Promise<OfflineState | null>; write(value: OfflineState | null): Promise<void> };
-export function browserPersistence(databaseName: string): Persistence {
+const deploymentScope = typeof location === "undefined" ? "test" : (location.pathname.split("/").filter(Boolean)[0] ?? "root");
+const DATABASE = `paper1_lab_outbox_v2:${deploymentScope}`;
+const STORE = "state";
+export function browserPersistence(scope = "legacy"): Persistence {
   const open = () => new Promise<IDBDatabase>((resolve, reject) => {
-    const r = indexedDB.open(databaseName, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore("state");
+    const r = indexedDB.open(DATABASE, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE);
     r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
   });
   return {
     async read() {
       const db = await open();
       try { return await new Promise<OfflineState | null>((resolve, reject) => {
-        const r = db.transaction("state").objectStore("state").get("current");
+        const r = db.transaction(STORE).objectStore(STORE).get(`archive:${scope}`);
         r.onsuccess = () => resolve(r.result ?? null); r.onerror = () => reject(r.error);
       }); } finally { db.close(); }
     },
     async write(value) {
       const db = await open();
       try { await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction("state", "readwrite", { durability: "strict" });
-        if (value) tx.objectStore("state").put(value, "current"); else tx.objectStore("state").delete("current");
+        const tx = db.transaction(STORE, "readwrite", { durability: "strict" });
+        if (value) tx.objectStore(STORE).put(value, `archive:${scope}`); else tx.objectStore(STORE).delete(`archive:${scope}`);
         tx.oncomplete = () => resolve(); tx.onabort = tx.onerror = () => reject(tx.error ?? new Error("local_storage_failed"));
       }); } finally { db.close(); }
     },
+  };
+}
+
+export async function listBrowserStates(): Promise<Array<{ key: string; state: OfflineState }>> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const r = indexedDB.open(DATABASE, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE);
+    r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+  });
+  try {
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const r = db.transaction(STORE).objectStore(STORE).getAllKeys();
+      r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+    });
+    const states = await new Promise<OfflineState[]>((resolve, reject) => {
+      const r = db.transaction(STORE).objectStore(STORE).getAll();
+      r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+    });
+    return keys.map((key, index) => ({ key: String(key), state: states[index] })).filter(item => item.state);
+  } finally { db.close(); }
+}
+
+export function participantPersistence(participantId: string, archiveNumber: number): Persistence {
+  const persistence = browserPersistence(`participant:${participantId}:archive:${archiveNumber}`);
+  return {
+    async read() {
+      const state = await persistence.read();
+      if (!state) return null;
+      return state.home?.participantId === participantId && state.home?.archiveNumber === archiveNumber ? state : null;
+    },
+    write: persistence.write,
   };
 }
 export class OfflineStore {
