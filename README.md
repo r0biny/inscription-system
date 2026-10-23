@@ -10,6 +10,12 @@ https://www.musicxlab.com/inscription-system/
 
 **Music X Lab 管理人不需要配置 Cloudflare 账号、API Token、数据库账号或 Wrangler，也不需要创建第二个数据库。**
 
+### 小内存服务器：可选的 Nginx 部署
+
+如果服务器已有 Nginx、希望不增加 Node 常驻进程，可采用 [Nginx 静态文件与 API 转发方案](docs/nginx_static.md)：在本机构建，使用 `deployment.json` 生成子目录、Cookie 隔离及 Worker 转发配置。此方案包含模拟登录、上传、离线补传和浏览器测试。
+
+下文首次部署和后续更新步骤仍是原有 Node 方案；选择 Nginx 方案时，请按独立指南操作，不需要启动 Node 或 systemd 服务。
+
 2026-09-14 更新：新手引导改为七条点击式流程介绍，采用完整的 outline / skeleton 示例；正式任务新增本机冻结提交、断网恢复和后台补传。配套 Cloudflare Worker 与 D1 增量迁移已由研究者部署。Music X Lab 管理人只需按下方「后续更新」拉取、测试、构建并重启本服务。功能和缓存注意事项见 [离线同步说明](docs/offline_sync.md)。
 
 ## 分工与交付范围
