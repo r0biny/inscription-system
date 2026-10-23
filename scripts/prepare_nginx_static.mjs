@@ -29,25 +29,33 @@ map $http_origin $inscription_upstream_origin {
     "" "";
     default ${quote(config.upstreamOrigin)};
 }
+# Stock Nginx cannot rename individual Set-Cookie lines, so the browser keeps
+# the Worker's cookie names; proxy_cookie_path confines them to the experiment
+# and only these names are forwarded. The pre-archive lab cookie is forwarded
+# while no paper1_session exists, and every API response expires it.
 map $cookie_${config.cookieName} $inscription_cookie_legacy {
     "" "";
     default "paper1_session=$cookie_${config.cookieName}; ";
 }
-map $cookie_${config.cookieName}_archive_1 $inscription_cookie_archive_1 {
+map $cookie_${config.cookieName} $inscription_cookie_legacy_clear {
     "" "";
-    default "paper1_session_archive_1=$cookie_${config.cookieName}_archive_1; ";
+    default "${config.cookieName}=; Path=${base}/; Max-Age=0; HttpOnly; Secure; SameSite=Lax";
 }
-map $cookie_${config.cookieName}_archive_2 $inscription_cookie_archive_2 {
-    "" "";
-    default "paper1_session_archive_2=$cookie_${config.cookieName}_archive_2; ";
+map $cookie_paper1_session $inscription_cookie_session {
+    "" $inscription_cookie_legacy;
+    default "paper1_session=$cookie_paper1_session; ";
 }
-map $cookie_${config.cookieName}_archive_3 $inscription_cookie_archive_3 {
+${[1, 2, 3].map(n => `map $cookie_paper1_session_archive_${n} $inscription_cookie_archive_${n} {
     "" "";
-    default "paper1_session_archive_3=$cookie_${config.cookieName}_archive_3; ";
+    default "paper1_session_archive_${n}=$cookie_paper1_session_archive_${n}; ";
 }
-map $cookie_${config.cookieName}_active_archive $inscription_cookie_active_archive {
+`).join('')}map $cookie_paper1_active_archive $inscription_cookie_active_archive {
     "" "";
-    default "paper1_active_archive=$cookie_${config.cookieName}_active_archive";
+    default "paper1_active_archive=$cookie_paper1_active_archive; ";
+}
+map "$inscription_cookie_session$inscription_cookie_archive_1$inscription_cookie_archive_2$inscription_cookie_archive_3$inscription_cookie_active_archive" $inscription_upstream_cookie {
+    default "";
+    "~^(?<inscription_cookie_list>.+); $" $inscription_cookie_list;
 }
 map $request_uri $inscription_worker_uri {
     default "";
@@ -67,6 +75,7 @@ map $upstream_http_location $inscription_redirect_target {
 }
 `;
   const apiHeaders = `    add_header Cache-Control "no-store" always;
+    add_header Set-Cookie $inscription_cookie_legacy_clear always;
     add_header X-Content-Type-Options "nosniff" always;`;
   const locations = `# Generated from deployment.json; include inside the main HTTPS server only.
 location = ${base} {
@@ -92,7 +101,7 @@ location ^~ ${base}/api/ {
     proxy_set_header Content-Type $http_content_type;
     proxy_set_header User-Agent $http_user_agent;
     proxy_set_header Origin $inscription_upstream_origin;
-    proxy_set_header Cookie "$inscription_cookie_legacy$inscription_cookie_archive_1$inscription_cookie_archive_2$inscription_cookie_archive_3$inscription_cookie_active_archive";
+    proxy_set_header Cookie $inscription_upstream_cookie;
 ${upstream.protocol === 'https:' ? `    proxy_ssl_server_name on;
     proxy_ssl_name ${quote(upstream.hostname)};
     proxy_ssl_verify on;
@@ -108,11 +117,7 @@ ${upstream.protocol === 'https:' ? `    proxy_ssl_server_name on;
     proxy_connect_timeout 8s;
     proxy_read_timeout 30s;
     proxy_send_timeout 30s;
-    proxy_cookie_name paper1_session ${config.cookieName};
-    proxy_cookie_name paper1_session_archive_1 ${config.cookieName}_archive_1;
-    proxy_cookie_name paper1_session_archive_2 ${config.cookieName}_archive_2;
-    proxy_cookie_name paper1_session_archive_3 ${config.cookieName}_archive_3;
-    proxy_cookie_name paper1_active_archive ${config.cookieName}_active_archive;
+    proxy_cookie_domain ~. ${quote(publicHost)};
     proxy_cookie_path / ${base}/;
     proxy_hide_header Cache-Control;
     proxy_hide_header Expires;
